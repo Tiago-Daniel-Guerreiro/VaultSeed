@@ -1,0 +1,1769 @@
+import { Button, LineEdit, ScrollView, Spinner } from "std-widgets.slint";
+
+export global ClipboardActions {
+    callback copy(string);
+}
+
+// PALETA DE CORES - ponto único de verdade
+export global Palette {
+    // Fundos
+    out property <color> bg-base:       #21252b;  // janela
+    out property <color> bg-panel:      #282c34;  // painéis / cards
+    out property <color> bg-sidebar:    #1e2227;  // sidebar
+    out property <color> bg-input:      #1a1d23;  // campos de texto
+    out property <color> bg-hover:      #2f333d;  // hover geral
+    out property <color> bg-active:     #3a3f4b;  // item selecionado
+
+    // Bordas
+    out property <color> border:        #3a3f4b;
+    out property <color> border-focus:  #61afef;
+
+    // Texto
+    out property <color> text-primary:  #abb2bf;
+    out property <color> text-heading:  #ffffff;
+    out property <color> text-muted:    #5c6370;
+    out property <color> text-link:     #61afef;
+
+    // Semântica
+    out property <color> accent:        #61afef;  // azul  - acção principal
+    out property <color> success:       #98c379;  // verde - sucesso
+    out property <color> warning:       #e5c07b;  // amarelo - aviso
+    out property <color> danger:        #e06c75;  // vermelho - erro / perigo
+    out property <color> info:          #56b6c2;  // ciano - informação
+
+    // Sobreposição de modal
+    out property <color> overlay:       #000000aa;
+
+    // Fundos semânticos (cartões de aviso/erro/sucesso/info) - antes inline
+    out property <color> bg-danger:        #2e1a1a;
+    out property <color> bg-danger-strong: #3a1a1a;
+    out property <color> bg-warning:       #2e2714;
+    out property <color> bg-success:       #1a3326;
+    out property <color> bg-info:          #12292e;
+}
+
+// TOKENS - dimensões, espaçamento e tipografia. Ponto único de verdade para manter consistência e escala em todas as views.
+export global Tokens {
+    // Larguras / layout
+    out property <length> list-col-width:    240px;  // coluna-lista / sub-sidebar
+    out property <length> mobile-breakpoint: 800px;  // abaixo disto: colapsa
+    out property <length> sidebar-collapsed: 44px;
+
+    // Alturas
+    out property <length> header-height:   56px;  // cabeçalho de coluna
+    out property <length> topbar-height:   48px;
+    out property <length> input-height:    36px;
+    out property <length> nav-item-height: 44px;
+
+    // Espaçamento / raio
+    out property <length> pad-view:  24px;
+    out property <length> pad-card:  16px;
+    out property <length> gap-md:    12px;
+    out property <length> gap-sm:    8px;
+    out property <length> radius:    8px;
+    out property <length> radius-sm: 6px;
+
+    // Tipografia
+    out property <length> fs-heading: 20px;  // título de detalhe
+    out property <length> fs-title:   16px;  // título de secção
+    out property <length> fs-column:  15px;  // título de coluna / topbar
+    out property <length> fs-body:    13px;
+    out property <length> fs-label:   11px;
+    out property <length> fs-micro:   10px;
+}
+
+export global WindowMetrics {
+    in-out property <length> avail-width: 1000px;
+}
+
+// TEXTO COM FONTES MISTAS - cada run de texto (ex: emoji vs. resto) é desenhado
+// com a font-family adequada. A font-family por defeito da app (Noto Sans) não
+// cobre emojis, e a fonte de emojis (Noto Emoji) não cobre letras - texto que
+// mistura os dois (ex: senhas geradas) precisa de "runs" com fonts diferentes
+// lado a lado, já que o Slint não escolhe a fonte por carácter dentro do mesmo Text.
+export struct TextRun {
+    text:  string,
+    emoji: bool,
+}
+
+// Uma linha de "runs" - ver MixedFontText. A divisão em linhas é feita do
+// lado do Rust (helpers::split_emoji_runs), já que um HorizontalLayout de
+// "runs" não quebra linha por si só.
+export struct TextLine {
+    runs: [TextRun],
+}
+
+export component MixedFontText inherits VerticalLayout {
+    in property <string>     raw-text: "";
+    in property <length>     font-size: 14px;
+    in property <int>        font-weight: 400;
+    in property <color>      color: Palette.text-heading;
+
+    property <int> dynamic-chars-limit: max(6, floor(WindowMetrics.avail-width / (root.font-size * 0.6)));
+    pure callback compute-lines(string /*texto*/, int /*chars-por-linha*/) -> [TextLine];
+    property <[TextLine]> lines: root.compute-lines(root.raw-text, root.dynamic-chars-limit);
+
+    spacing: 0px;
+
+    for line in root.lines : HorizontalLayout {
+        spacing: 0px;
+
+        for run in line.runs : Text {
+            text:        run.text;
+            font-size:   root.font-size;
+            font-weight: root.font-weight;
+            color:       root.color;
+            font-family: run.emoji ? "Noto Emoji" : "Noto Sans";
+            wrap:        word-wrap;
+            vertical-alignment: center;
+        }
+    }
+}
+
+// DIVISOR HORIZONTAL
+export component Divider inherits Rectangle {
+    height: 1px;
+    background: Palette.border;
+}
+
+// "X" de fechar.
+export component IconClose inherits Rectangle {
+    in property <length> size:  12px;
+    in property <color>  icon-color: Palette.text-muted;
+    width: size; height: size;
+    Path {
+        stroke:         root.icon-color;
+        stroke-width:   1.5px;
+        viewbox-width:  10;
+        viewbox-height: 10;
+        commands:       "M 1 1 L 9 9 M 9 1 L 1 9";
+        animate stroke { duration: 100ms; }
+    }
+}
+
+// Menu "mais opções" (três pontos horizontais) - usado p.ex. no botão
+// "Sistema" da topbar, em vez de um Text literal "...".
+export component IconMore inherits Rectangle {
+    in property <length> size:  18px;
+    in property <color>  icon-color: Palette.text-muted;
+    width: size; height: size;
+    VerticalLayout {
+        alignment: center;
+        HorizontalLayout {
+            alignment: center;
+            spacing: size * 0.18;
+            for _ in [0, 1, 2] : Rectangle {
+                width:         size * 0.16;
+                height:        size * 0.16;
+                border-radius: self.width / 2;
+                background:    root.icon-color;
+                animate background { duration: 120ms; }
+            }
+        }
+    }
+}
+
+// Marca de seleção (checkbox marcado).
+export component IconCheck inherits Rectangle {
+    in property <length> size:  12px;
+    in property <color>  icon-color: Palette.bg-base;
+    width: size; height: size;
+    Path {
+        fill:           transparent;
+        stroke:         root.icon-color;
+        stroke-width:   1.6px;
+        viewbox-width:  10;
+        viewbox-height: 10;
+        commands:       "M 1.5 5.2 L 4 7.7 L 8.5 2.5";
+    }
+}
+
+// Indicador circular (ponto colorido) - substitui o ícone de info/erro/aviso.
+export component IconDot inherits Rectangle {
+    in property <length> size:  8px;
+    in property <color>  icon-color: Palette.info;
+    width: size; height: size;
+    border-radius: size / 2;
+    background: root.icon-color;
+}
+
+// Triângulo de aviso com "!".
+export component IconWarning inherits Rectangle {
+    in property <length> size:  14px;
+    in property <color>  icon-color: Palette.warning;
+    width: size; height: size;
+    Path {
+        fill:           transparent;
+        stroke:         root.icon-color;
+        stroke-width:   1.2px;
+        viewbox-width:  14;
+        viewbox-height: 14;
+        commands:       "M 7 1 L 13 12.5 L 1 12.5 Z M 7 5.5 L 7 8.5 M 7 10.5 L 7 10.7";
+    }
+}
+
+// Cadeado (estado bloqueado/restrição).
+export component IconLock inherits Rectangle {
+    in property <length> size:  14px;
+    in property <color>  icon-color: Palette.text-muted;
+    width: size; height: size;
+    Path {
+        fill:           transparent;
+        stroke:         root.icon-color;
+        stroke-width:   1.2px;
+        viewbox-width:  14;
+        viewbox-height: 14;
+        commands:       "M 3 6.5 L 11 6.5 L 11 13 L 3 13 Z M 4.5 6.5 L 4.5 4 A 2.5 2.5 0 0 1 9.5 4 L 9.5 6.5";
+    }
+}
+
+// Pasta.
+export component IconFolder inherits Rectangle {
+    in property <length> size:  14px;
+    in property <color>  icon-color: Palette.text-muted;
+    width: size; height: size;
+    Path {
+        fill:           transparent;
+        stroke:         root.icon-color;
+        stroke-width:   1.2px;
+        viewbox-width:  14;
+        viewbox-height: 14;
+        commands:       "M 1 3.5 L 5 3.5 L 6.5 5.5 L 13 5.5 L 13 12 L 1 12 Z";
+    }
+}
+
+// Lixo (caixote - usado em zonas/acções de eliminação por arrastar).
+export component IconTrash inherits Rectangle {
+    in property <length> size:  16px;
+    in property <color>  icon-color: Palette.text-muted;
+    width: size; height: size;
+    Path {
+        fill:           transparent;
+        stroke:         root.icon-color;
+        stroke-width:   1.5px;
+        viewbox-width:  16;
+        viewbox-height: 16;
+        commands:       "M 2 4 L 14 4 M 5 4 L 5 14 L 11 14 L 11 4 M 6 4 L 6 2 L 10 2 L 10 4";
+        animate stroke { duration: 100ms; }
+    }
+}
+
+// Asterisco (senha estática - mesmo símbolo "*" usado em todo o lado para as marcar, agora como ícone em vez de Text simples).
+export component IconAsterisk inherits Rectangle {
+    in property <length> size:  14px;
+    in property <color>  icon-color: Palette.text-muted;
+    width: size; height: size;
+    Path {
+        fill:           transparent;
+        stroke:         root.icon-color;
+        stroke-width:   1.2px;
+        viewbox-width:  14;
+        viewbox-height: 14;
+        commands:       "M 2 7 L 12 7 M 4.5 2.67 L 9.5 11.33 M 9.5 2.67 L 4.5 11.33";
+    }
+}
+
+// Cópia (dois retângulos sobrepostos).
+export component IconCopy inherits Rectangle {
+    in property <length> size:  14px;
+    in property <color>  icon-color: Palette.text-muted;
+    width: size; height: size;
+    Path {
+        fill:           transparent;
+        stroke:         root.icon-color;
+        stroke-width:   1.2px;
+        viewbox-width:  14;
+        viewbox-height: 14;
+        commands:       "M 5 5 L 12 5 L 12 12 L 5 12 Z M 2 2 L 9 2 L 9 9 L 2 9 Z";
+    }
+}
+
+// Lápis (editar inline).
+export component IconEdit inherits Rectangle {
+    in property <length> size:  14px;
+    in property <color>  icon-color: Palette.text-muted;
+    width: size; height: size;
+    Path {
+        fill:           transparent;
+        stroke:         root.icon-color;
+        stroke-width:   1.2px;
+        viewbox-width:  14;
+        viewbox-height: 14;
+        commands:       "M 1.5 12.5 L 2.5 9.5 L 9 3 L 11.5 5.5 L 5 12 Z M 8 4 L 10.5 6.5";
+    }
+}
+
+// Ecrã/dispositivo.
+export component IconDevice inherits Rectangle {
+    in property <length> size:  14px;
+    in property <color>  icon-color: Palette.text-muted;
+    width: size; height: size;
+    Path {
+        fill:           transparent;
+        stroke:         root.icon-color;
+        stroke-width:   1.2px;
+        viewbox-width:  14;
+        viewbox-height: 14;
+        commands:       "M 1 2 L 13 2 L 13 9 L 1 9 Z M 5 12 L 9 12 M 7 9 L 7 12";
+    }
+}
+
+// Globo (domínio / senha gerada).
+export component IconGlobe inherits Rectangle {
+    in property <length> size:  14px;
+    in property <color>  icon-color: Palette.text-muted;
+    width: size; height: size;
+    Path {
+        fill:           transparent;
+        stroke:         root.icon-color;
+        stroke-width:   1.2px;
+        viewbox-width:  14;
+        viewbox-height: 14;
+        commands:       "M 7 1 A 6 6 0 1 0 7 13 A 6 6 0 1 0 7 1 M 1 7 L 13 7 M 7 1 A 3 6 0 0 0 7 13 A 3 6 0 0 0 7 1";
+    }
+}
+
+// Engrenagem (configurações).
+export component IconGear inherits Rectangle {
+    in property <length> size:  14px;
+    in property <color>  icon-color: Palette.text-muted;
+    width: size; height: size;
+    Path {
+        fill:           transparent;
+        stroke:         root.icon-color;
+        stroke-width:   1.2px;
+        viewbox-width:  14;
+        viewbox-height: 14;
+        commands:       "M 7 1 A 6 6 0 1 0 7 13 A 6 6 0 1 0 7 1 M 7 4.5 A 2.5 2.5 0 1 0 7 9.5 A 2.5 2.5 0 1 0 7 4.5";
+    }
+}
+
+// Setas de rotação/atualização.
+export component IconRefresh inherits Rectangle {
+    in property <length> size:  14px;
+    in property <color>  icon-color: Palette.text-muted;
+    width: size; height: size;
+    Path {
+        fill:           transparent;
+        stroke:         root.icon-color;
+        stroke-width:   1.2px;
+        viewbox-width:  14;
+        viewbox-height: 14;
+        commands:       "M 12 3 L 12 6 L 9 6 M 2 11 L 2 8 L 5 8 M 12 3 A 6 6 0 0 0 2.5 8 M 2 11 A 6 6 0 0 0 11.5 6";
+    }
+}
+
+// Círculo com visto - sucesso/concluído.
+export component IconCheckCircle inherits Rectangle {
+    in property <length> size:  14px;
+    in property <color>  icon-color: Palette.success;
+    width: size; height: size;
+    Path {
+        fill:           transparent;
+        stroke:         root.icon-color;
+        stroke-width:   1.2px;
+        viewbox-width:  14;
+        viewbox-height: 14;
+        commands:       "M 7 1 A 6 6 0 1 0 7 13 A 6 6 0 1 0 7 1 M 4 7 L 6.5 9.5 L 10.5 4.5";
+    }
+}
+
+// Caixa/pacote.
+export component IconBox inherits Rectangle {
+    in property <length> size:  14px;
+    in property <color>  icon-color: Palette.text-muted;
+    width: size; height: size;
+    Path {
+        fill:           transparent;
+        stroke:         root.icon-color;
+        stroke-width:   1.2px;
+        viewbox-width:  14;
+        viewbox-height: 14;
+        commands:       "M 1 4 L 7 1 L 13 4 L 13 10 L 7 13 L 1 10 Z M 1 4 L 7 7 L 13 4 M 7 7 L 7 13";
+    }
+}
+
+export component IconChevron inherits Rectangle {
+    in property <length> size:  10px;
+    in property <color>  icon-color: Palette.text-muted;
+    in property <bool>   expanded: false;
+    width: size; height: size;
+    Path {
+        fill:           transparent;
+        stroke:         root.icon-color;
+        stroke-width:   1.4px;
+        viewbox-width:  10;
+        viewbox-height: 10;
+        commands: root.expanded ? "M 1.5 3 L 5 7 L 8.5 3" : "M 3 1.5 L 7 5 L 3 8.5";
+    }
+}
+
+// Botão de fechar reutilizável (X desenhado, área de toque, centrado).
+export component CloseButton inherits Rectangle {
+    in property <color> icon-color:       Palette.text-muted;
+    in property <color> icon-color-hover: Palette.text-heading;
+    callback clicked();
+    width: 28px; height: 28px;
+    border-radius: 6px;
+    background: ta.has-hover ? Palette.bg-hover : transparent;
+    ta := TouchArea { clicked => { root.clicked(); } }
+    IconClose {
+        size:  12px;
+        icon-color: ta.has-hover ? root.icon-color-hover : root.icon-color;
+    }
+}
+
+// PURE SPINNER - ponto a girar continuamente num só sentido
+export component PureSpinner inherits Rectangle {
+    in property <length> size: 32px;
+    in property <color>  spinner-color: Palette.accent;
+
+    width:  size;
+    height: size;
+
+    // Anel de fundo (subtil)
+    Rectangle {
+        width:  100%;
+        height: 100%;
+        border-radius: self.width / 2;
+        border-width:  3px;
+        border-color:  #ffffff22;
+    }
+
+    // Ponto que orbita continuamente a borda do anel
+    Rectangle {
+        property <angle> orbit-angle: (mod(animation-tick(), 1200ms) / 1200ms) * 360deg;
+        width:         root.size * 0.18;
+        height:        root.size * 0.18;
+        border-radius: self.width / 2;
+        background:    root.spinner-color;
+        x: root.size / 2 - self.width  / 2 + (root.size / 2 - self.width  / 2) * sin(orbit-angle);
+        y: root.size / 2 - self.height / 2 - (root.size / 2 - self.height / 2) * cos(orbit-angle);
+    }
+}
+
+// ALERT BASE - componente base para alertas em ecrã inteiro (erro/aviso/info/loading). Vertical e horizontalmente centrado, altura "fit-content"
+export component AlertBase inherits Rectangle {
+    in property <string> message: "";
+    // "error" | "warning" | "info" | "success"
+    in property <string> alert-type: "info";
+    in property <bool>   show: false;
+    in property <bool>   block-background-interactions: false;
+    in property <bool>   loading: false;
+    in property <bool>   closable: true;
+
+    // Fecho explícito (botão de fechar)
+    callback closed();
+    // Clique no fundo / no próprio cartão - sem ação por defeito
+    callback background-clicked();
+    callback alert-clicked();
+
+    private property <bool> dismissed: false;
+    changed message => { self.dismissed = false; }
+    changed show    => { self.dismissed = false; }
+
+    private property <color> accent-c:
+           root.alert-type == "error"   ? Palette.danger
+         : root.alert-type == "warning" ? Palette.warning
+         : root.alert-type == "success" ? Palette.success
+         : Palette.info;
+    private property <color> bg-c:
+           root.alert-type == "error"   ? Palette.bg-danger
+         : root.alert-type == "warning" ? Palette.bg-warning
+         : root.alert-type == "success" ? Palette.bg-success
+         : Palette.bg-info;
+
+    visible: root.show && root.message != "" && !root.dismissed;
+    width:   100%;
+    height:  100%;
+
+    // Overlay de fundo - apenas quando bloqueante
+    if root.block-background-interactions : Rectangle {
+        width:      100%;
+        height:     100%;
+        background: Palette.overlay;
+
+        TouchArea {
+            width:   100%;
+            height:  100%;
+            clicked => { root.background-clicked(); }
+        }
+    }
+
+    // Cartão do alerta - centrado, altura fit-content
+    card := Rectangle {
+        width:  min(440px, parent.width - 40px);
+        height: card-body.preferred-height;
+        x: (parent.width  - self.width)  / 2;
+        y: (parent.height - self.height) / 2;
+
+        background:    root.bg-c;
+        border-radius: 10px;
+        border-width:  1px;
+        border-color:  root.accent-c;
+        drop-shadow-blur:     16px;
+        drop-shadow-color:    #00000066;
+        drop-shadow-offset-y: 4px;
+
+        // Absorve cliques dentro do cartão (não conta como clique no fundo)
+        TouchArea {
+            width: 100%; height: 100%;
+            clicked => { root.alert-clicked(); }
+        }
+
+        // Estado "a processar": spinner grande centrado + mensagem por baixo
+        // (mesmo padrão usado no passo de calibração/criação do assistente de
+        // nova sessão), em vez do pequeno spinner inline ao lado do texto.
+        card-body := VerticalLayout {
+            if root.loading : VerticalLayout {
+                padding: 20px;
+                spacing: 12px;
+                alignment: center;
+
+                HorizontalLayout {
+                    alignment: center;
+                    PureSpinner { size: 32px; spinner-color: root.accent-c; }
+                }
+
+                Text {
+                    text:                 root.message;
+                    color:                root.accent-c;
+                    font-size:            13px;
+                    wrap:                 word-wrap;
+                    horizontal-alignment: center;
+                }
+            }
+
+            if !root.loading : HorizontalLayout {
+                padding: 16px;
+                spacing: 10px;
+                alignment: start;
+
+                VerticalLayout {
+                    alignment: center;
+                    IconDot { size: 10px; icon-color: root.accent-c; }
+                }
+
+                Text {
+                    text:       root.message;
+                    color:      root.accent-c;
+                    font-size:  13px;
+                    wrap:       word-wrap;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+
+                if root.closable : VerticalLayout {
+                    alignment: center;
+                    CloseButton {
+                        icon-color:       root.accent-c;
+                        icon-color-hover: root.accent-c;
+                        clicked => {
+                            root.dismissed = true;
+                            root.closed();
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Alerta de erro - variant pré-configurada
+export component ErrorAlert inherits AlertBase {
+    alert-type: "error";
+}
+
+// Alerta de aviso - variant pré-configurada
+export component WarningAlert inherits AlertBase {
+    alert-type: "warning";
+}
+
+// Alerta de informação - variant pré-configurada
+export component InfoAlert inherits AlertBase {
+    alert-type: "info";
+}
+
+// Alerta de carregamento - bloqueante, sem botão de fechar, com spinner
+export component LoadingAlert inherits AlertBase {
+    alert-type: "info";
+    loading: true;
+    closable: false;
+    block-background-interactions: true;
+}
+
+// BADGE DE ESTADO - pequena etiqueta colorida
+export component StatusBadge inherits Rectangle {
+    in property <string> label;
+    // "success" | "warning" | "danger" | "info" | "muted"
+    in property <string> variant: "muted";
+
+    height: 18px;
+    width: badge-text.preferred-width + 16px;
+    border-radius: 10px;
+    background: variant == "success" ? Palette.bg-success
+              : variant == "warning" ? Palette.bg-warning
+              : variant == "danger"  ? Palette.bg-danger
+              : variant == "info"    ? Palette.bg-info
+              : #2a2d35;
+
+    badge-text := Text {
+        x: 0; y: 0;
+        width:  100%;
+        height: 100%;
+        text:       root.label;
+        color:      variant == "success" ? Palette.success
+                  : variant == "warning" ? Palette.warning
+                  : variant == "danger"  ? Palette.danger
+                  : variant == "info"    ? Palette.info
+                  : Palette.text-muted;
+        font-size:  10px;
+        font-weight: 600;
+        vertical-alignment: center;
+        horizontal-alignment: center;
+    }
+}
+
+export component InputBase inherits VerticalLayout {
+    in property <string> label: "";
+    in property <string> placeholder: "";
+    in property <string> hint: "";
+    in property <bool>   error: false;
+    // "text" | "password" | "file" | "hex"
+    in property <string> input-type: "text";
+    in property <bool>   enabled: true;
+    in-out property <string> value: "";
+    // Apenas para input-type="locked": texto fixo mostrado em vez de `value` (o campo fica não-editável e sem botão "...").
+    in property <string> locked-text: "";
+
+    callback edited();
+    callback accepted();
+    // Apenas relevante quando input-type="file"
+    callback browse();
+
+    width: 100%;
+    spacing: 4px;
+
+    if root.label != "" : Text {
+        text:        root.label;
+        color:       Palette.text-muted;
+        font-size:   11px;
+        font-weight: 600;
+    }
+
+    HorizontalLayout {
+        spacing: 6px;
+        // Ambos os filhos têm a mesma altura -> alinhados e centrados (sem o botão "..." ficar mais alto que o input).
+        height: Tokens.input-height;
+
+        Rectangle {
+            horizontal-stretch: 1;
+            height:        Tokens.input-height;
+            border-radius: 6px;
+            border-width:  1px;
+            border-color:  root.error ? Palette.danger : Palette.border;
+            background:    root.enabled ? Palette.bg-input : Palette.bg-panel;
+            clip:          true;
+            animate border-color { duration: 100ms; }
+
+            field := LineEdit {
+                x:    1px;
+                y:    1px;
+                width:     parent.width  - 2px;
+                height:    parent.height - 2px;
+                text:      root.input-type == "locked" ? root.locked-text : root.value;
+                placeholder-text: root.placeholder;
+                input-type: root.input-type == "password" ? InputType.password : InputType.text;
+                enabled:    root.enabled;
+                read-only:  root.input-type == "file" || root.input-type == "locked";
+                min-width:  0px;
+                edited   => {
+                    if root.input-type != "locked" {
+                        root.value = self.text;
+                    }
+                    root.edited();
+                }
+                accepted => { root.accepted(); }
+            }
+        }
+
+        // Botão "..." adjacente - apenas para campos de ficheiro
+        if root.input-type == "file" : Rectangle {
+            width:  40px;
+            height: Tokens.input-height;
+            border-radius: 6px;
+            border-width:  1px;
+            border-color:  root.error ? Palette.danger : Palette.border;
+            background:     browse-ta.has-hover ? Palette.bg-hover : Palette.bg-input;
+
+            browse-ta := TouchArea { clicked => { root.browse(); } }
+
+            Text {
+                text:                 "...";
+                color:                Palette.text-primary;
+                vertical-alignment:   center;
+                horizontal-alignment: center;
+            }
+        }
+    }
+
+    if hint != "" : Text {
+        text:       root.hint;
+        color:      root.error ? Palette.danger : Palette.text-muted;
+        font-size:  10px;
+        wrap:       word-wrap;
+        animate color { duration: 150ms; }
+    }
+}
+
+// Campo de texto simples
+export component TextInput inherits InputBase {
+    input-type: "text";
+}
+
+// Campo de senha (texto oculto)
+export component PasswordInput inherits InputBase {
+    input-type: "password";
+}
+
+// Campo de ficheiro - input + botão "..." adjacente
+export component FileInput inherits InputBase {
+    input-type: "file";
+}
+
+// Campo hexadecimal (chaves, salts, seeds, etc.)
+export component HexInput inherits InputBase {
+    input-type: "hex";
+}
+
+// LabeledInput - mantém a API antiga (label/placeholder/hint/is-secret/has-error/value) por compatibilidade, sobre InputBase.
+export component LabeledInput inherits InputBase {
+    in property <bool> is-secret: false;
+    in property <bool> has-error: false;
+
+    input-type: root.is-secret ? "password" : "text";
+    error:      root.has-error;
+}
+
+// INPUT COM VALOR PADRÃO - mostra o valor padrão como TEXTO REAL e editável
+export component InputDefault inherits InputBase {
+    in property <string>  default-value: "";
+    in property <bool>    is-secret:     false;
+    in property <bool>    has-error:     false;
+    out property <bool>   is-default:    root.value == root.default-value;
+
+    // Inicial = default; ao editar, o utilizador sobrepõe (a ligação quebra).
+    value:      root.default-value;
+    input-type: root.is-secret ? "password" : "text";
+    error:      root.has-error;
+}
+
+// CAMPO DE CAMINHO - input + botão "..." num container que os força à MESMA altura, centrados verticalmente. 
+export component PathInputRow inherits FileInput {
+    in property <bool> has-error: false;
+    in property <bool> locked: false;
+    error:      root.has-error;
+    input-type: root.locked ? "locked" : "file";
+}
+
+// CARD - container estilizado com fundo e borda
+export component Card inherits Rectangle {
+    in property <length>  pad: 16px;
+
+    background:    Palette.bg-panel;
+    border-radius: 8px;
+    border-width:  1px;
+    border-color:  Palette.border;
+
+    // Conteúdo vai aqui via @children
+    VerticalLayout {
+        padding: root.pad == 16px ? 12px : root.pad;
+        @children
+    }
+}
+
+// TÍTULO DE SECÇÃO
+export component SectionTitle inherits VerticalLayout {
+    in property <string> title;
+    in property <string> subtitle: "";
+
+    spacing: 4px;
+
+    Text {
+        text:        root.title;
+        font-size:   16px;
+        font-weight: 700;
+        color:       Palette.text-heading;
+    }
+
+    if subtitle != "" : Text {
+        text:      root.subtitle;
+        font-size: 12px;
+        color:     Palette.text-muted;
+        wrap:      word-wrap;
+    }
+}
+
+// SESSION PANEL BASE - base partilhada pelos painéis de gestão da sessão
+export component SessionPanelBase inherits VerticalLayout {
+    in property <string> panel-title;
+    in property <string> panel-subtitle: "";
+
+    alignment: start;
+    spacing: 20px;
+    padding: WindowMetrics.avail-width < 700px ? 12px : 24px;
+
+    SectionTitle {
+        title:    root.panel-title;
+        subtitle: root.panel-subtitle;
+    }
+
+    @children
+}
+
+// COMPACT BUTTON - botão com dimensão reduzida para interfaces densas
+export component CompactButton {
+    in property <string> text: "";
+    in property <bool> primary: false;
+    callback clicked;
+
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+
+        Button {
+            text: root.text;
+            primary: root.primary;
+            height: 30px;
+            clicked => { root.clicked(); }
+        }
+    }
+}
+
+// BACK BUTTON - seta "<" clicável (área de toque de 44px) usada nos cabeçalhos
+export component BackButton inherits Rectangle {
+    callback clicked;
+
+    width:  44px;
+    height: 44px;
+
+    ta := TouchArea {
+        clicked => { root.clicked(); }
+    }
+
+    Text {
+        text:               "←";
+        font-size:          20px;
+        color:              ta.has-hover ? Palette.accent : Palette.text-muted;
+        horizontal-alignment: center;
+        vertical-alignment:   center;
+        animate color { duration: 100ms; }
+    }
+}
+
+// ADD TOGGLE BUTTON - botão "＋／✕" (36px) de mostrar/esconder formulário.
+export component AddToggleButton inherits Rectangle {
+    in property <bool> active: false;
+    in property <bool> enabled: true;
+    callback clicked();
+
+    width:         36px;
+    height:        36px;
+    border-radius: 6px;
+    opacity:       root.enabled ? 1.0 : 0.4;
+    background:    active ? Palette.bg-danger : ta.has-hover ? Palette.bg-hover : transparent;
+    animate background { duration: 120ms; }
+
+    ta := TouchArea {
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+    }
+
+    if !root.active : Text {
+        text:               "+";
+        font-size:          20px;
+        color:              ta.has-hover ? Palette.text-heading : Palette.text-primary;
+        horizontal-alignment: center;
+        vertical-alignment:   center;
+        animate color { duration: 120ms; }
+    }
+
+    if root.active : IconClose {
+        x: (parent.width  - self.width)  / 2;
+        y: (parent.height - self.height) / 2;
+        size:       10px;
+        icon-color: Palette.danger;
+    }
+}
+
+// SIDEBAR TOGGLE - botão ☰ / ✕ para abrir/fechar a coluna-lista em ecrã estreito
+export component SidebarToggle inherits Rectangle {
+    in property <bool> open: false;
+    callback clicked;
+
+    width:  32px;
+    height: 32px;
+    border-radius: Tokens.radius-sm;
+    background: ta.has-hover ? Palette.bg-hover : transparent;
+    animate background { duration: 100ms; }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+
+    Path {
+        x: (parent.width  - 10px) / 2;
+        y: (parent.height - 10px) / 2;
+        width:  10px;
+        height: 10px;
+        stroke:         Palette.text-muted;
+        stroke-width:   1.5px;
+        viewbox-width:  10;
+        viewbox-height: 10;
+        // Seta para a esquerda (aberto) ou para a direita (fechado)
+        commands: root.open
+            ? "M 9 5 L 1 5 M 1 5 L 4.5 1.5 M 1 5 L 4.5 8.5"
+            : "M 1 5 L 9 5 M 9 5 L 5.5 1.5 M 9 5 L 5.5 8.5";
+    }
+}
+
+// LIST HEADER - cabeçalho de coluna de lista: voltar + título/subtítulo + add.
+export component ListHeader inherits Rectangle {
+    in property <string> title;
+    in property <string> subtitle;
+    in property <bool>   add-active: false;
+    in property <bool>   add-enabled: true;
+    in property <bool>   show-back:  true;
+    in property <bool>   show-add:   true;
+    // Toggle ☰ da coluna-lista em mobile
+    in property <bool>   show-toggle: false;
+    in property <bool>   toggle-open: false;
+    callback back();
+    callback add();
+    callback toggle();
+
+    height:     Tokens.header-height;
+    background: Palette.bg-panel;
+
+    // Linha separadora inferior
+    Rectangle {
+        y:          parent.height - 1px;
+        width:      100%;
+        height:     1px;
+        background: Palette.border;
+    }
+
+    HorizontalLayout {
+        padding-left:  (root.show-back || root.show-toggle) ? 8px : 16px;
+        padding-right: 10px;
+        spacing:       6px;
+        alignment:     start;
+
+        if root.show-toggle : VerticalLayout {
+            alignment: center;
+            SidebarToggle {
+                open: root.toggle-open;
+                clicked => { root.toggle(); }
+            }
+        }
+
+        if root.show-back : VerticalLayout {
+            alignment: center;
+            BackButton { clicked => { root.back(); } }
+        }
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            spacing: 1px;
+            alignment: center;
+
+            Text {
+                text:        root.title;
+                font-size:   Tokens.fs-body;
+                font-weight: 700;
+                color:       Palette.text-heading;
+                overflow:    elide;
+            }
+            if root.subtitle != "" : Text {
+                text:      root.subtitle;
+                font-size: Tokens.fs-label;
+                color:     Palette.text-muted;
+                overflow:  elide;
+            }
+        }
+
+        if root.show-add : VerticalLayout {
+            alignment: center;
+            AddToggleButton {
+                active:  root.add-active;
+                enabled: root.add-enabled;
+                clicked => { root.add(); }
+            }
+        }
+    }
+}
+
+// CHECKBOX ROW - linha clicável com caixa ✓, título, subtítulo e badge ATIVO.
+export component CheckboxRow inherits Rectangle {
+    in property <bool>   checked: false;
+    in property <string> title;
+    in property <string> subtitle;
+    in property <color>  accent:        Palette.accent;
+    callback toggled();
+
+    height:        max(44px, row.preferred-height);
+    background:    Palette.bg-panel;
+    border-radius: 6px;
+    border-width:  1px;
+    border-color:  checked ? accent : Palette.border;
+    animate border-color { duration: 150ms; }
+
+    TouchArea { clicked => { root.toggled(); } }
+
+    row := HorizontalLayout {
+        padding-left:   12px;
+        padding-right:  12px;
+        padding-top:    8px;
+        padding-bottom: 8px;
+        spacing:       10px;
+        alignment:     start;
+
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width:         16px;
+                height:        16px;
+                border-radius: 3px;
+                border-width:  2px;
+                border-color:  checked ? accent : Palette.border;
+                background:    checked ? accent : transparent;
+                animate border-color { duration: 120ms; }
+                animate background   { duration: 120ms; }
+
+                if checked : IconCheck {
+                    size:       10px;
+                    icon-color: Palette.bg-base;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                }
+            }
+        }
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: 1px;
+
+            Text { text: root.title;    font-size: 13px; color: Palette.text-primary; wrap: word-wrap; }
+            Text { text: root.subtitle; font-size: 11px; color: Palette.text-muted;    wrap: word-wrap; }
+        }
+    }
+}
+
+// INLINE ALERT BASE - banner de mensagem embutido no layout (não é overlay).
+export component InlineAlertBase inherits Rectangle {
+    in property <string> message;
+    // "error" | "warning" | "success" | "info"
+    in property <string> alert-type: "info";
+    in property <bool>   visible-override: true;
+
+    // Clicar no banner fecha-o. O chamador pode ligar-se para reagir.
+    callback closed();
+
+    // Fechar localmente, sem depender do Rust. O dismiss reinicia sempre que a mensagem muda (ex.: limpar para "" e voltar a definir um novo erro).
+    private property <bool> dismissed: false;
+    changed message => { self.dismissed = false; }
+
+    // Em ecrãs estreitos: edge-to-edge (sem cantos), fechar no topo + mensagem abaixo.
+    property <bool> compact: WindowMetrics.avail-width < 600px;
+    private property <color> accent-c: root.alert-type == "error"   ? Palette.danger
+         : root.alert-type == "warning" ? Palette.warning
+         : root.alert-type == "success" ? Palette.success
+         : Palette.info;
+
+    visible:       message != "" && visible-override && !dismissed;
+    height:        (message != "" && !dismissed) ? max(48px, content-row.preferred-height + 20px) : 0px;
+    border-radius: root.compact ? 0px : 8px;
+    border-width:  1px;
+    background:    root.alert-type == "error"   ? Palette.bg-danger
+                 : root.alert-type == "warning" ? Palette.bg-warning
+                 : root.alert-type == "success" ? Palette.bg-success
+                 : Palette.bg-info;
+    border-color:  root.accent-c;
+
+    animate height { duration: 200ms; easing: ease-out; }
+
+    // Clicar em qualquer parte do banner fecha-o
+    TouchArea {
+        width: 100%; height: 100%;
+        clicked => {
+            root.dismissed = true;
+            root.closed();
+        }
+    }
+
+    content-row := VerticalLayout {
+        padding: root.compact ? 10px : 8px;
+        spacing: 6px;
+
+        // Layout largo - ícone + texto + fechar numa linha
+        if !root.compact : HorizontalLayout {
+            spacing: 8px;
+            alignment: start;
+
+            VerticalLayout {
+                alignment: center;
+                IconDot { size: 8px; icon-color: root.accent-c; }
+            }
+
+            Text {
+                text:  root.message;
+                color: root.accent-c;
+                font-size:  13px;
+                wrap:       word-wrap;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+            }
+
+            VerticalLayout {
+                alignment: center;
+                CloseButton {
+                    icon-color: root.accent-c;
+                    icon-color-hover: root.accent-c;
+                    clicked => { root.dismissed = true; root.closed(); }
+                }
+            }
+        }
+
+        // Layout compacto - fechar centrado no topo, mensagem por baixo
+        if root.compact : HorizontalLayout {
+            alignment: center;
+            CloseButton {
+                icon-color: root.accent-c;
+                icon-color-hover: root.accent-c;
+                clicked => { root.dismissed = true; root.closed(); }
+            }
+        }
+        if root.compact : Text {
+            text:  root.message;
+            color: root.accent-c;
+            font-size:  13px;
+            wrap:       word-wrap;
+            horizontal-alignment: center;
+        }
+    }
+}
+
+// Banner de mensagem inline - mantém a API `variant` por compatibilidade com as views existentes (erro/aviso/sucesso/info).
+export component MessageBanner inherits InlineAlertBase {
+    in property <string> variant: "info";
+    alert-type: root.variant;
+}
+
+// TOAST NOTIFICATION - alerta centrado, não-bloqueante, desaparece ao fechar ou automaticamente (o Rust controla `show` e `message`, com Timer).
+export component ToastNotification inherits AlertBase {
+    // "info" | "success" | "error" | "warning"
+    alert-type: "info";
+    block-background-interactions: false;
+    closable: true;
+
+    // Fechar manualmente (a AppWindow define show = false)
+    callback on-close();
+    closed => { root.on-close(); }
+}
+
+// LOADING OVERLAY - bloqueia interação enquanto operação corre em background
+export component LoadingOverlay inherits LoadingAlert {
+    message: "A processar...";
+}
+
+export component ModalBase inherits Rectangle {
+    in property <bool>   show: false;
+    in property <bool>   close-on-outside-click: true;
+    in property <bool>   has-confirmation: false;
+    in property <length> card-width: 420px;
+    in property <color>  card-border-color: Palette.border;
+    in property <length> fullscreen-breakpoint: 0px;
+    in property <length> overlay-extend-top: 0px;
+
+    // Fecho normal (clique fora, quando permitido)
+    callback closed();
+    // Clique fora quando close-on-outside-click=false - sem ação por defeito
+    callback outside-click-attempt();
+
+    visible:    root.show;
+    width:      100%;
+    height:     100%;
+    background: transparent;
+
+    property <bool> fullscreen: root.fullscreen-breakpoint > 0px && WindowMetrics.avail-width < root.fullscreen-breakpoint;
+
+    Rectangle {
+        x:          0px;
+        y:          -root.overlay-extend-top;
+        width:      parent.width;
+        height:     parent.height + root.overlay-extend-top;
+        background: Palette.overlay;
+    }
+
+    // Captura cliques fora do cartão
+    TouchArea {
+        x:      0px;
+        y:      -root.overlay-extend-top;
+        width:  parent.width;
+        height: parent.height + root.overlay-extend-top;
+        clicked => {
+            if (root.close-on-outside-click) {
+                root.closed();
+            } else if (root.has-confirmation) {
+                root.outside-click-attempt();
+            }
+        }
+    }
+
+    // Cartão
+    card := Rectangle {
+        width:         root.fullscreen ? parent.width : min(root.card-width, parent.width - 40px);
+        height:        root.fullscreen ? parent.height + root.overlay-extend-top : min(body.preferred-height, parent.height - 40px);
+        background:    Palette.bg-panel;
+        border-radius: root.fullscreen ? 0px : 12px;
+        border-width:  root.fullscreen ? 0px : 1px;
+        border-color:  root.card-border-color;
+        x: root.fullscreen ? 0px : (parent.width  - self.width)  / 2;
+        y: root.fullscreen ? -root.overlay-extend-top : (parent.height - self.height) / 2;
+        drop-shadow-blur:    root.fullscreen ? 0px : 20px;
+        drop-shadow-color:   #00000088;
+        drop-shadow-offset-y: root.fullscreen ? 0px : 6px;
+
+        // Absorve cliques dentro do cartão (não conta como clique fora)
+        TouchArea { width: 100%; height: 100%; }
+
+        ScrollView {
+            width:  100%;
+            height: 100%;
+            body := VerticalLayout {
+                alignment: start;
+                padding: 28px;
+                spacing: 16px;
+
+                @children
+            }
+        }
+    }
+}
+
+// FULLSCREEN MODAL BASE - overlay para modais grandes (vários campos/passos)
+export component FullscreenModalBase inherits Rectangle {
+    in property <bool>   show: false;
+    in property <bool>   close-on-outside-click: true;
+    in property <length> fullscreen-breakpoint: 800px;
+    in property <length> card-max-width: 400px;
+    in property <length> card-max-height: 100000px;
+    in property <length> card-height-margin: 80px;
+    in property <color>  overlay-color: #00000088;
+    in property <color>  card-background: Palette.bg-panel;
+    in property <length> card-border-width: 0px;
+    in property <color>  card-border-color: Palette.border;
+    in property <length> card-shadow-blur: 0px;
+    in property <length> card-shadow-offset-y: 6px;
+    in property <length> overlay-extend-top: 0px;
+
+    callback closed();
+
+    visible:    root.show;
+    width:      100%;
+    height:     100%;
+
+    Rectangle {
+        x:          0px;
+        y:          -root.overlay-extend-top;
+        width:      parent.width;
+        height:     parent.height + root.overlay-extend-top;
+        background: root.overlay-color;
+    }
+
+    TouchArea {
+        x:      0px;
+        y:      -root.overlay-extend-top;
+        width:  parent.width;
+        height: parent.height + root.overlay-extend-top;
+        clicked => {
+            if (root.close-on-outside-click) {
+                root.closed();
+            }
+        }
+    }
+
+    property <bool> fullscreen: WindowMetrics.avail-width < root.fullscreen-breakpoint;
+
+    card := Rectangle {
+        width:  root.fullscreen ? parent.width  : min(parent.width - 40px, root.card-max-width);
+        height: root.fullscreen ? parent.height + root.overlay-extend-top : min(body.preferred-height, min(root.card-max-height, parent.height - root.card-height-margin));
+        x: (parent.width  - self.width)  / 2;
+        y: root.fullscreen ? -root.overlay-extend-top : (parent.height - self.height) / 2;
+        background:    root.card-background;
+        border-radius: root.fullscreen ? 0px : 12px;
+        border-width:  root.fullscreen ? 0px : root.card-border-width;
+        border-color:  root.card-border-color;
+        drop-shadow-blur:     root.fullscreen ? 0px : root.card-shadow-blur;
+        drop-shadow-color:    #00000088;
+        drop-shadow-offset-y: root.card-shadow-offset-y;
+
+        // Absorve cliques dentro do cartão (não conta como clique fora)
+        TouchArea { width: 100%; height: 100%; }
+
+        ScrollView {
+            width:  100%;
+            height: 100%;
+
+            body := VerticalLayout {
+                padding:   20px;
+                spacing:   12px;
+                alignment: start;
+
+                @children
+            }
+        }
+    }
+}
+
+export component ConfirmDialog inherits ModalBase {
+    in property <string> title:    "Confirmar";
+    in property <string> message:  "";
+    // "danger" | "warning" | "info"
+    in property <string> variant:  "warning";
+    in property <string> confirm-label: "Confirmar";
+    in property <string> cancel-label:  "Cancelar";
+    // Terceiro botão opcional (ex: "Guardar" antes de uma acção destrutiva).
+    // Vazio = não aparece - não afecta nenhum uso existente do diálogo.
+    in property <string> extra-label:   "";
+
+    callback on-confirm();
+    callback on-cancel();
+    callback on-extra();
+
+    card-width:        400px;
+    fullscreen-breakpoint: 800px;
+    card-border-color: variant == "danger"  ? Palette.danger : variant == "warning" ? Palette.warning : Palette.border;
+    closed => { root.on-cancel(); }
+
+    // Ícone + título
+    HorizontalLayout {
+        spacing: 10px;
+        alignment: start;
+
+        VerticalLayout {
+            alignment: center;
+            IconDot {
+                size:  10px;
+                icon-color: variant == "danger"  ? Palette.danger : variant == "warning" ? Palette.warning : Palette.info;
+            }
+        }
+
+        Text {
+            text:       root.title;
+            font-size:  16px;
+            font-weight: 700;
+            color:      Palette.text-heading;
+            vertical-alignment: center;
+        }
+    }
+
+    if message != "" : Text {
+        text:      root.message;
+        color:     Palette.text-primary;
+        font-size: 13px;
+        wrap:      word-wrap;
+    }
+
+    Divider {}
+
+    // Botões - em linha quando cabem, empilhados (largura toda) quando o cartão é estreito
+    if root.width >= 420px : HorizontalLayout {
+        alignment: end;
+        spacing:   10px;
+
+        Button {
+            text:    root.cancel-label;
+            clicked => { root.on-cancel(); }
+        }
+
+        if root.extra-label != "" : Button {
+            text:    root.extra-label;
+            clicked => { root.on-extra(); }
+        }
+
+        Button {
+            text:    root.confirm-label;
+            primary: true;
+            clicked => { root.on-confirm(); }
+        }
+    }
+
+    if root.width < 420px : VerticalLayout {
+        spacing: 8px;
+
+        Button {
+            text:    root.confirm-label;
+            primary: true;
+            clicked => { root.on-confirm(); }
+        }
+
+        if root.extra-label != "" : Button {
+            text:    root.extra-label;
+            clicked => { root.on-extra(); }
+        }
+
+        Button {
+            text:    root.cancel-label;
+            clicked => { root.on-cancel(); }
+        }
+    }
+}
+
+export component ConfirmationModal inherits ConfirmDialog {}
+
+export component CalibrationModal inherits ModalBase {
+    in property <string> title:     "Resultado da calibração";
+    // Resultado da calibração
+    in property <string> result-m:  "";
+    in property <string> result-t:  "";
+    in property <string> result-p:  "";
+    in property <string> result-ms: "";   // tempo Argon2id (ms)
+    // Re-medição dos valores editados (controlada pelo Rust)
+    in property <bool>      verifying:   false;
+    in-out property <bool>  verify-done: false;
+    in property <string>    verify-ms:   "";
+
+    callback on-cancel();
+    callback on-accept(string /*m*/, string /*t*/, string /*p*/);
+    callback on-verify(string /*m*/, string /*t*/, string /*p*/);
+
+    // true se algum parâmetro foi alterado face ao resultado da calibração.
+    property <bool> modified:
+           m-field.value != root.result-m
+        || t-field.value != root.result-t
+        || p-field.value != root.result-p;
+
+    // Valores muito altos podem demorar minutos/horas a calcular - exige confirmação extra antes de avançar para a verificação/aceitação.
+    property <bool> too-high:
+           m-field.value.to-float() > 2097152
+        || t-field.value.to-float() > 50
+        || p-field.value.to-float() > 16;
+    in-out property <bool> high-value-confirmed: false;
+
+    // Ao reabrir, repõe campos para o resultado atual e limpa estado de verificação.
+    changed show => {
+        if root.show {
+            root.verify-done           = false;
+            root.high-value-confirmed  = false;
+            m-field.value    = root.result-m;
+            t-field.value    = root.result-t;
+            p-field.value    = root.result-p;
+        }
+    }
+
+    card-width: 480px;
+    fullscreen-breakpoint: 400px;
+    closed => { root.on-cancel(); }
+
+    Text {
+        text:        root.title;
+        font-size:   16px;
+        font-weight: 700;
+        color:       Palette.text-heading;
+    }
+
+    // Tempo medido na calibração
+    HorizontalLayout {
+        spacing: 8px;
+        Text {
+            text:               "Tempo Argon2id:";
+            color:              Palette.text-muted;
+            font-size:          13px;
+            vertical-alignment: center;
+        }
+        Text {
+            text:               root.result-ms + " ms";
+            color:              Palette.text-primary;
+            font-size:          13px;
+            font-weight:        700;
+            vertical-alignment: center;
+        }
+    }
+
+    Divider {}
+
+    Text {
+        text:        "Parâmetros (pode editar)";
+        font-size:   11px;
+        font-weight: 600;
+        color:       Palette.text-muted;
+    }
+
+    VerticalLayout {
+        spacing: 10px;
+        m-field := InputDefault {
+            label:         "m_cost (KiB)";
+            default-value: root.result-m;
+            hint:          "mínimo: 65536 KiB (64 MiB)";
+            edited   => { root.verify-done = false; root.high-value-confirmed = false; }
+            accepted => {
+                // to-float() em texto não numérico devolve 0 - cai sempre no mínimo, o que também rejeita valores inválidos/não numéricos.
+                if self.value.to-float() < 65536    { self.value = "65536"; }
+                if self.value.to-float() > 16777216 { self.value = "16777216"; }
+            }
+        }
+        t-field := InputDefault {
+            label:         "t_cost";
+            default-value: root.result-t;
+            hint:          "mínimo: 3";
+            edited   => { root.verify-done = false; root.high-value-confirmed = false; }
+            accepted => {
+                if self.value.to-float() < 3   { self.value = "3"; }
+                if self.value.to-float() > 200 { self.value = "200"; }
+            }
+        }
+        p-field := InputDefault {
+            label:         "p_cost";
+            default-value: root.result-p;
+            hint:          "mínimo: 4";
+            edited   => { root.verify-done = false; root.high-value-confirmed = false; }
+            accepted => {
+                if self.value.to-float() < 4  { self.value = "4"; }
+                if self.value.to-float() > 64 { self.value = "64"; }
+            }
+        }
+    }
+
+    if root.verifying : Text {
+        text:      "A medir o tempo dos parâmetros editados...";
+        color:     Palette.text-muted;
+        font-size: 12px;
+        wrap:      word-wrap;
+    }
+
+    if root.modified && root.too-high && !root.high-value-confirmed && !root.verifying : Rectangle {
+        background:    #2e1a1a;
+        border-radius: 8px;
+        border-width:  1px;
+        border-color:  Palette.danger;
+        VerticalLayout {
+            padding: 10px;
+            spacing: 8px;
+            Text {
+                text:      "Estes parâmetros são muito elevados e podem demorar muito tempo (minutos ou mais) a calcular. Tem a certeza?";
+                color:     Palette.danger;
+                font-size: 12px;
+                wrap:      word-wrap;
+            }
+            HorizontalLayout {
+                alignment: end;
+                Button {
+                    text:    "Confirmar valores elevados";
+                    clicked => { root.high-value-confirmed = true; }
+                }
+            }
+        }
+    }
+
+    if root.modified && root.verify-done && !root.verifying : Rectangle {
+        background:    #2e2714;
+        border-radius: 8px;
+        border-width:  1px;
+        border-color:  Palette.warning;
+        VerticalLayout {
+            padding: 10px;
+            Text {
+                text:      "Os parâmetros editados demoram " + root.verify-ms
+                         + " ms. Confirma a alteração?";
+                color:     Palette.warning;
+                font-size: 12px;
+                wrap:      word-wrap;
+            }
+        }
+    }
+
+    Divider {}
+
+    HorizontalLayout {
+        alignment: end;
+        spacing:   10px;
+
+        Button {
+            text:    "Cancelar";
+            clicked => { root.on-cancel(); }
+        }
+
+        Button {
+            text:    !root.modified ? "Aceitar"
+                   : (root.verify-done ? "Confirmar" : "Verificar tempo");
+            primary: true;
+            // Bloqueado enquanto há valores muito altos por confirmar -  evita disparar uma calibração que pode demorar muito tempo sem o utilizador ter percebido o risco.
+            enabled: !root.verifying && (!root.too-high || root.high-value-confirmed);
+            clicked => {
+                if m-field.value.to-float() < 65536    { m-field.value = "65536"; }
+                if m-field.value.to-float() > 16777216 { m-field.value = "16777216"; }
+                if t-field.value.to-float() < 3        { t-field.value = "3"; }
+                if t-field.value.to-float() > 200      { t-field.value = "200"; }
+                if p-field.value.to-float() < 4        { p-field.value = "4"; }
+                if p-field.value.to-float() > 64       { p-field.value = "64"; }
+                if (!root.modified || root.verify-done) {
+                    root.on-accept(m-field.value, t-field.value, p-field.value);
+                } else {
+                    root.on-verify(m-field.value, t-field.value, p-field.value);
+                }
+            }
+        }
+    }
+}
+
+
+// EMPTY STATE - placeholder quando uma lista está vazia
+export component EmptyState inherits VerticalLayout {
+    in property <string> icon:    "";
+    in property <string> title:   "Sem resultados";
+    in property <string> message: "";
+    in property <string> action-label: "";
+
+    callback on-action();
+
+    alignment: center;
+    spacing:   12px;
+    padding:   40px;
+
+    if root.icon != "" : Text {
+        text:               root.icon;
+        font-size:          40px;
+        horizontal-alignment: center;
+    }
+
+    Text {
+        text:               root.title;
+        font-size:          16px;
+        font-weight:        700;
+        color:              Palette.text-heading;
+        horizontal-alignment: center;
+    }
+
+    if message != "" : Text {
+        text:               root.message;
+        color:              Palette.text-muted;
+        font-size:          13px;
+        horizontal-alignment: center;
+        wrap:               word-wrap;
+    }
+
+    if action-label != "" : HorizontalLayout {
+        alignment: center;
+        Button {
+            text:    root.action-label;
+            primary: true;
+            clicked => { root.on-action(); }
+        }
+    }
+}
+
+// KEY-VALUE ROW - linha de detalhe "Label: Valor"
+export component KeyValueRow inherits VerticalLayout {
+    in property <string> label;
+    in property <string> value;
+    in property <bool>   monospace: false;
+    in property <bool>   copyable:  false;
+    in property <bool>   force-stacked: false;
+    callback on-copy(string);
+
+    property <bool> stacked: root.force-stacked || WindowMetrics.avail-width < 480px;
+    property <bool> narrow-screen:    WindowMetrics.avail-width < 800px;
+    property <bool> copy-on-own-line: root.copyable && root.narrow-screen;
+
+    alignment: start;
+    spacing: root.stacked ? 4px : 0px;
+
+    if root.stacked : Text {
+        text:       root.label + ":";
+        color:      Palette.text-muted;
+        font-size:  13px;
+        wrap:       word-wrap;
+    }
+
+    HorizontalLayout {
+        spacing: 8px;
+        alignment: start;
+
+        if !root.stacked : Text {
+            text:       root.label + ":";
+            color:      Palette.text-muted;
+            font-size:  13px;
+            // Mínimo suficiente para legibilidade; cresce até 30% do pai.
+            min-width:  100px;
+            max-width:  200px;
+            wrap:       no-wrap;
+            overflow:   elide;
+            vertical-alignment: center;
+        }
+
+        value-text := Text {
+            text:       root.value;
+            color:      Palette.text-primary;
+            font-size:  13px;
+            wrap:       word-wrap;
+            horizontal-stretch: 1;
+            vertical-alignment: center;
+        }
+
+        if copyable && !root.copy-on-own-line : VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width:         28px;
+                height:        28px;
+                border-radius: 4px;
+                background:    copy-ta.has-hover ? Palette.bg-active : transparent;
+                animate background { duration: 100ms; }
+
+                copy-ta := TouchArea {
+                    clicked => {
+                        ClipboardActions.copy(root.value);
+                        root.on-copy(root.value);
+                    }
+                }
+
+                IconCopy {
+                    size: 14px;
+                    x: (parent.width  - self.width)  / 2;
+                    y: (parent.height - self.height) / 2;
+                    icon-color: copy-ta.has-hover ? Palette.accent : Palette.text-muted;
+                    animate icon-color { duration: 100ms; }
+                }
+            }
+        }
+    }
+
+    if root.copy-on-own-line : HorizontalLayout {
+        alignment: start;
+
+        Rectangle {
+            width:         28px;
+            height:        28px;
+            border-radius: 4px;
+            background:    copy-ta-below.has-hover ? Palette.bg-active : transparent;
+            animate background { duration: 100ms; }
+
+            copy-ta-below := TouchArea {
+                clicked => {
+                    ClipboardActions.copy(root.value);
+                    root.on-copy(root.value);
+                }
+            }
+
+            IconCopy {
+                size: 14px;
+                x: (parent.width  - self.width)  / 2;
+                y: (parent.height - self.height) / 2;
+                icon-color: copy-ta-below.has-hover ? Palette.accent : Palette.text-muted;
+                animate icon-color { duration: 100ms; }
+            }
+        }
+    }
+}

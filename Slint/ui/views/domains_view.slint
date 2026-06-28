@@ -1,0 +1,1570 @@
+import { Button, LineEdit, ScrollView } from "std-widgets.slint";
+
+import {
+    Palette, Tokens, Divider, LabeledInput, MessageBanner,
+    Card, SectionTitle, StatusBadge, KeyValueRow,
+    EmptyState, ListHeader, SidebarToggle, WindowMetrics, CloseButton,
+    IconBox, IconCopy, IconLock, IconWarning, IconGlobe, BackButton,
+    IconCheck, IconClose, TextLine, MixedFontText,
+} from "../components/shared_components.slint";
+
+import { AuthenticationModal } from "./login_view.slint";
+
+import { SidebarBase } from "../components/sidebar_components.slint";
+
+// STRUCTS DE DADOS
+export struct DomainItem {
+    uuid:              string,
+    identifier:        string,
+    active-variation:  int,
+    compromise-count:  int,
+    restriction-uuid:  string,
+    restriction-name:  string,
+}
+
+export struct PasswordResultItem {
+    password:            string,
+    variation:           int,
+    entropy-display:     string,   // format_millibits() já formatado
+    device-uuid:         string,
+    restriction-uuid:    string,
+    is-frozen:           bool,     // true = vem de generate_password_from_frozen
+}
+
+export struct CompromisedVersionItem {
+    uuid:         string,
+    variation:    int,
+    timestamp:    string,   // formatado: "2024-01-15 14:32:00"
+    frozen-id:    string,   // identifier_frozen
+}
+
+export struct FrozenDetailItem {
+    record-uuid:          string,
+    variation:            int,
+    timestamp:            string,
+    config-version:       int,
+    kmac-context:         string,
+    identifier-frozen:    string,
+    default-mask:         int,
+    hmac-hex:             string,   // "(não disponível)" se ausente
+    sequence-display:     string,   // linhas pré-formatadas, join("\n")
+    char-lists-display:   string,   // idem
+    hmac-status:          string,   // "ok" | "fail" | "unavailable" | "pending"
+}
+
+export struct RestrictionChoiceItem {
+    uuid:       string,
+    name:       string,
+    is-current: bool,
+}
+
+component DomainListItem inherits Rectangle {
+    in property <string> identifier;
+    in property <int>    variation;
+    in property <int>    compromise-count;
+    in property <bool>   selected: false;
+
+    callback clicked;
+
+    height:        48px;
+    border-radius: 6px;
+    background:    selected     ? Palette.bg-active : ta.has-hover ? Palette.bg-hover : transparent;
+    animate background { duration: 120ms; }
+
+    ta := TouchArea { clicked => { root.clicked(); } }
+
+    Rectangle {
+        x:             0px;
+        y:             (parent.height - self.height) / 2;
+        width:         3px;
+        height:        22px;
+        border-radius: 2px;
+        background:    root.selected ? Palette.accent : transparent;
+        animate background { duration: 150ms; }
+    }
+
+    HorizontalLayout {
+        padding-left:  12px;
+        padding-right: 8px;
+        spacing:       8px;
+        alignment:     start;
+
+        VerticalLayout {
+            alignment: center;
+            IconGlobe { size: 15px; }
+        }
+
+        VerticalLayout {
+            alignment:          center;
+            horizontal-stretch: 1;
+            spacing:            2px;
+
+            Text {
+                text:        root.identifier;
+                font-size:   12px;
+                font-weight: root.selected ? 700 : 400;
+                color:       root.selected ? Palette.text-heading : Palette.text-primary;
+                overflow:    elide;
+                animate color { duration: 120ms; }
+            }
+
+            HorizontalLayout {
+                spacing: 6px;
+
+                Text {
+                    text:      "var. " + root.variation;
+                    font-size: 11px;
+                    color:     Palette.text-muted;
+                }
+
+                if compromise-count > 0 : Text {
+                    text:      "·";
+                    font-size: 11px;
+                    color:     Palette.text-muted;
+                }
+
+                if compromise-count > 0 : Text {
+                    text:      root.compromise-count + " comprometida(s)";
+                    font-size: 11px;
+                    color:     Palette.warning;
+                }
+            }
+        }
+
+        Text {
+            text:               root.selected ? ">" : "";
+            color:              Palette.accent;
+            font-size:          18px;
+            vertical-alignment: center;
+        }
+    }
+}
+
+component PasswordResultCard inherits Rectangle {
+    in property <PasswordResultItem> result;
+    in property <bool>               visible-pw: true;
+
+    callback on-copy();
+    callback on-close();
+    pure callback compute-lines(string /*texto*/, int /*chars-por-linha*/) -> [TextLine];
+
+    property <bool> narrow: WindowMetrics.avail-width < 500px;
+
+    background:    Palette.bg-panel;
+    border-radius: 10px;
+    border-width:  1px;
+    border-color:  Palette.success;
+
+    VerticalLayout {
+        padding: 16px;
+        spacing: 12px;
+
+        // Cabeçalho com botão fechar
+        HorizontalLayout {
+            spacing: 8px;
+
+            Text {
+                text:        result.is-frozen ? "Senha Comprometida" : "Senha Gerada";
+                font-size:   13px;
+                font-weight: 700;
+                color:       result.is-frozen ? Palette.info : Palette.success;
+                horizontal-stretch: 1;
+                vertical-alignment: center;
+            }
+
+            CloseButton {
+                clicked => { root.on-close(); }
+            }
+        }
+
+        Divider {}
+
+        Rectangle {
+            background:    Palette.bg-base;
+            border-radius: 6px;
+            border-width:  1px;
+            border-color:  Palette.border;
+
+            HorizontalLayout {
+                padding: 14px;
+
+                if !visible-pw : Text {
+                    text:               "••••••••••••••••";
+                    font-size:          22px;
+                    font-weight:        700;
+                    color:              Palette.text-muted;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                    wrap:               word-wrap;
+                }
+
+                if visible-pw : MixedFontText {
+                    raw-text:           result.password;
+                    font-size:          14px;
+                    font-weight:        700;
+                    color:              Palette.text-heading;
+                    horizontal-stretch: 1;
+                    compute-lines(text, limit) => { root.compute-lines(text, limit) }
+                }
+            }
+        }
+
+        HorizontalLayout {
+            alignment: start;
+            StatusBadge {
+                label:   "var. " + result.variation;
+                variant: "info";
+            }
+        }
+
+        if !root.narrow : HorizontalLayout {
+            spacing: 16px;
+
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: 2px;
+
+                Text {
+                    text:      "Comprimento";
+                    font-size: 11px;
+                    color:     Palette.text-muted;
+                    overflow:  elide;
+                }
+                Text {
+                    text:      result.password.character-count;
+                    font-size: 14px;
+                    font-weight: 700;
+                    color:     Palette.text-primary;
+                    overflow:  elide;
+                }
+            }
+
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: 2px;
+
+                Text {
+                    text:      "Entropia";
+                    font-size: 11px;
+                    color:     Palette.text-muted;
+                    overflow:  elide;
+                }
+                Text {
+                    text:      result.entropy-display + " bits";
+                    font-size: 14px;
+                    font-weight: 700;
+                    color:     Palette.accent;
+                    overflow:  elide;
+                }
+            }
+        }
+
+        if root.narrow : VerticalLayout {
+            spacing: 8px;
+
+            VerticalLayout {
+                spacing: 2px;
+                Text {
+                    text:      "Comprimento";
+                    font-size: 11px;
+                    color:     Palette.text-muted;
+                }
+                Text {
+                    text:      result.password.character-count;
+                    font-size: 14px;
+                    font-weight: 700;
+                    color:     Palette.text-primary;
+                }
+            }
+
+            VerticalLayout {
+                spacing: 2px;
+                Text {
+                    text:      "Entropia";
+                    font-size: 11px;
+                    color:     Palette.text-muted;
+                }
+                Text {
+                    text:      result.entropy-display + " bits";
+                    font-size: 14px;
+                    font-weight: 700;
+                    color:     Palette.accent;
+                }
+            }
+
+        }
+
+        // UUIDs (só para senha derivada normal)
+        if !result.is-frozen : VerticalLayout {
+            spacing: 4px;
+
+            KeyValueRow {
+                label:        "Device";
+                value:        result.device-uuid;
+                copyable:     true;
+                force-stacked: true;
+               
+            }
+            KeyValueRow {
+                label:        "Restriction";
+                value:        result.restriction-uuid;
+                copyable:     true;
+                force-stacked: true;
+               
+            }
+        }
+    }
+}
+
+component CompromisedVersionRow inherits Rectangle {
+    in property <CompromisedVersionItem> item;
+    in property <bool>                   selected: false;
+
+    callback clicked;
+
+    height:        52px;
+    border-radius: 6px;
+    border-width:  1px;
+    border-color:  selected ? Palette.accent : Palette.border;
+    background:    selected     ? Palette.bg-active : ta.has-hover ? Palette.bg-hover : Palette.bg-input;
+    animate background { duration: 120ms; }
+
+    ta := TouchArea { clicked => { root.clicked(); } }
+
+    HorizontalLayout {
+        padding-left:  12px;
+        padding-right: 10px;
+        spacing:       10px;
+        alignment:     start;
+
+        VerticalLayout {
+            alignment:          center;
+            horizontal-stretch: 1;
+            spacing:            2px;
+
+            HorizontalLayout {
+                spacing: 8px;
+
+                Text {
+                    text:        "Variação " + item.variation;
+                    font-size:   13px;
+                    font-weight: 600;
+                    color:       selected ? Palette.text-heading : Palette.text-primary;
+                    animate color { duration: 120ms; }
+                }
+
+                StatusBadge {
+                    label:   "COMPROMETIDA";
+                    variant: "warning";
+                }
+            }
+
+            Text {
+                text:      item.timestamp;
+                font-size: 11px;
+                color:     Palette.text-muted;
+            }
+        }
+
+        Text {
+            text:               selected ? ">" : "";
+            font-size:          18px;
+            color:              Palette.accent;
+            vertical-alignment: center;
+        }
+    }
+}
+
+component FrozenDetailsPanel inherits VerticalLayout {
+    in property <FrozenDetailItem> detail;
+    in property <PasswordResultItem> password-result;
+    in property <bool>              password-visible: false;
+    in-out property <bool>          show-password:    false;
+
+    callback on-view();
+    callback on-copy();
+    callback on-delete();
+    callback on-close-password();
+    pure callback compute-lines(string /*texto*/, int /*chars-por-linha*/) -> [TextLine];
+
+    alignment: start;
+    spacing:   16px;
+    padding:   20px;
+
+    property <bool> narrow: WindowMetrics.avail-width < 500px;
+
+    // Cabeçalho
+    HorizontalLayout {
+        spacing:   10px;
+        alignment: start;
+
+        VerticalLayout {
+            alignment: center;
+            IconBox { size: 22px; }
+        }
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            spacing: 2px;
+            alignment: center;
+
+            Text {
+                text:        "Variação " + detail.variation;
+                font-size:   18px;
+                font-weight: 700;
+                color:       Palette.text-heading;
+            }
+
+            Text {
+                text:      detail.timestamp;
+                font-size: 12px;
+                color:     Palette.text-muted;
+            }
+        }
+
+        StatusBadge {
+            label:   "SNAPSHOT";
+            variant: "warning";
+        }
+    }
+
+    Divider {}
+
+    if !root.narrow : HorizontalLayout {
+        spacing: 8px;
+
+        Button {
+            text:               "Ver senha";
+            primary:            true;
+            horizontal-stretch: 1;
+            clicked => { root.on-view(); }
+        }
+
+        Button {
+            text:               "Copiar senha";
+            horizontal-stretch: 1;
+            clicked => { root.on-copy(); }
+        }
+    }
+
+    if root.narrow : VerticalLayout {
+        spacing: 8px;
+
+        Button {
+            text:    "Ver senha";
+            primary: true;
+            width:   100%;
+            clicked => { root.on-view(); }
+        }
+
+        Button {
+            text:    "Copiar senha";
+            width:   100%;
+            clicked => { root.on-copy(); }
+        }
+    }
+
+    if show-password : PasswordResultCard {
+        result:      root.password-result;
+        visible-pw:  true;
+        on-copy  => { root.on-copy(); }
+        on-close => {
+            root.show-password = false;
+            root.on-close-password();
+        }
+        compute-lines(text, limit) => { root.compute-lines(text, limit) }
+    }
+
+    // Detalhes técnicos do snapshot
+    Rectangle {
+        background:    Palette.bg-panel;
+        border-radius: 8px;
+        border-width:  1px;
+        border-color:  Palette.border;
+
+        VerticalLayout {
+            padding: 16px;
+            spacing: 8px;
+
+            Text {
+                text:        "Detalhes do snapshot";
+                font-size:   13px;
+                font-weight: 700;
+                color:       Palette.text-muted;
+            }
+
+            Divider {}
+
+            KeyValueRow { label: "Record UUID";       value: detail.record-uuid;       copyable: true; force-stacked: true; }
+            KeyValueRow { label: "Config version";    value: detail.config-version; }
+            KeyValueRow { label: "Contexto KMAC";     value: detail.kmac-context;      copyable: true; force-stacked: true; }
+            KeyValueRow { label: "ID congelado";      value: detail.identifier-frozen; copyable: true; force-stacked: true; }
+            KeyValueRow { label: "Máscara padrão";    value: detail.default-mask; }
+            KeyValueRow { label: "HMAC";              value: detail.hmac-hex;          copyable: true; force-stacked: true; }
+        }
+    }
+
+    // Sequência snapshot
+    Rectangle {
+        background:    Palette.bg-panel;
+        border-radius: 8px;
+        border-width:  1px;
+        border-color:  Palette.border;
+
+        VerticalLayout {
+            padding: 16px;
+            spacing: 8px;
+
+            Text {
+                text:        "Sequência (snapshot)";
+                font-size:   13px;
+                font-weight: 700;
+                color:       Palette.text-muted;
+            }
+
+            Divider {}
+
+            Text {
+                text:      detail.sequence-display == "" ? "(não definida)" : detail.sequence-display;
+                font-size: 12px;
+                color:     Palette.text-primary;
+                wrap:      word-wrap;
+            }
+        }
+    }
+
+    // Char lists snapshot
+    Rectangle {
+        background:    Palette.bg-panel;
+        border-radius: 8px;
+        border-width:  1px;
+        border-color:  Palette.border;
+
+        VerticalLayout {
+            padding: 16px;
+            spacing: 8px;
+
+            Text {
+                text:        "Listas de caracteres (snapshot)";
+                font-size:   13px;
+                font-weight: 700;
+                color:       Palette.text-muted;
+            }
+
+            Divider {}
+
+            Text {
+                text:      detail.char-lists-display == "" ? "(nenhuma)" : detail.char-lists-display;
+                font-size: 12px;
+                color:     Palette.text-primary;
+                wrap:      word-wrap;
+            }
+        }
+    }
+
+    // HMAC status badge
+    if detail.hmac-status != "pending" : Rectangle {
+        height:        40px;
+        border-radius: 6px;
+        border-width:  1px;
+        background:    detail.hmac-status == "ok"   ? #1a3326 : detail.hmac-status == "fail" ? #2e1a1a : #2a2d35;
+        border-color:  detail.hmac-status == "ok"   ? Palette.success : detail.hmac-status == "fail" ? Palette.danger : Palette.border;
+
+        HorizontalLayout {
+            padding-left:  14px;
+            spacing:       10px;
+            alignment:     start;
+
+            if detail.hmac-status == "ok" : VerticalLayout {
+                alignment: center;
+                IconCheck { size: 14px; icon-color: Palette.success; }
+            }
+
+            if detail.hmac-status == "fail" : VerticalLayout {
+                alignment: center;
+                IconClose { size: 14px; icon-color: Palette.danger; }
+            }
+
+            if detail.hmac-status != "ok" && detail.hmac-status != "fail" : VerticalLayout {
+                alignment: center;
+                IconWarning { size: 14px; icon-color: Palette.text-muted; }
+            }
+
+            Text {
+                text:      detail.hmac-status == "ok"   ? "HMAC verificado - senha íntegra" : detail.hmac-status == "fail" ? "HMAC NÃO corresponde - senha pode estar corrompida" : "HMAC não disponível para este snapshot";
+                font-size:  13px;
+                color:      detail.hmac-status == "ok"   ? Palette.success : detail.hmac-status == "fail" ? Palette.danger : Palette.text-muted;
+                vertical-alignment: center;
+            }
+        }
+    }
+
+    Rectangle {
+        background:    #2e1a1a;
+        border-radius: 8px;
+        border-width:  1px;
+        border-color:  Palette.danger;
+
+        VerticalLayout {
+        if !root.narrow : HorizontalLayout {
+            padding:   16px;
+            spacing:   12px;
+            alignment: start;
+
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: 2px;
+
+                Text {
+                    text:      "Apagar snapshot";
+                    font-size: 13px;
+                    color:     Palette.danger;
+                    font-weight: 700;
+                }
+
+                Text {
+                    text:      "Remove permanentemente este registo histórico.";
+                    font-size: 11px;
+                    color:     Palette.text-muted;
+                    wrap:      word-wrap;
+                }
+            }
+
+            Button {
+                text:    "Apagar";
+                clicked => { root.on-delete(); }
+            }
+        }
+
+        if root.narrow : VerticalLayout {
+            padding: 16px;
+            spacing: 10px;
+
+            Text {
+                text:      "Apagar snapshot";
+                font-size: 13px;
+                color:     Palette.danger;
+                font-weight: 700;
+            }
+
+            Text {
+                text:      "Remove permanentemente este registo histórico.";
+                font-size: 11px;
+                color:     Palette.text-muted;
+                wrap:      word-wrap;
+            }
+
+            Button {
+                text:    "Apagar";
+                width:   100%;
+                clicked => { root.on-delete(); }
+            }
+        }
+        }
+    }
+}
+
+component FrozenVersionPage inherits VerticalLayout {
+    in property <DomainItem>         domain;
+    in property <FrozenDetailItem>   detail;
+    in property <PasswordResultItem> password-result;
+    in property <bool>               password-visible: false;
+    in property <bool>               show-password:    false;
+    in property <string>             error-generate:   "";
+
+    // Auth state (shared with DomainsView)
+    in-out property <bool>   show-auth-modal:    false;
+    in-out property <string> auth-action:        "";
+    in-out property <string> frozen-record-uuid: "";
+
+    callback on-delete-and-back();
+    callback on-close-password();
+    callback on-back();
+    pure callback compute-lines(string /*texto*/, int /*chars-por-linha*/) -> [TextLine];
+
+    spacing: 0px;
+    padding: 0px;
+
+    // Cabeçalho com botão de voltar
+    HorizontalLayout {
+        padding-left:   WindowMetrics.avail-width < 700px ? 12px : 24px;
+        padding-right:  WindowMetrics.avail-width < 700px ? 12px : 24px;
+        padding-top:    12px;
+        padding-bottom: 12px;
+        spacing: 12px;
+        alignment: start;
+
+        BackButton { clicked => { root.on-back(); } }
+
+        VerticalLayout {
+            alignment: center;
+            spacing:   2px;
+
+            Text {
+                text:        root.domain.identifier;
+                font-size:   14px;
+                font-weight: 700;
+                color:       Palette.text-heading;
+            }
+            Text {
+                text:      "Versão comprometida " + root.detail.variation;
+                font-size: 11px;
+                color:     Palette.text-muted;
+            }
+        }
+    }
+
+    Divider {}
+
+    ScrollView {
+        horizontal-stretch: 1;
+        vertical-stretch:   1;
+
+        VerticalLayout {
+            alignment: start;
+
+            FrozenDetailsPanel {
+                detail:           root.detail;
+                password-result:  root.password-result;
+                password-visible: root.password-visible;
+                show-password:    root.show-password;
+
+                on-view() => {
+                    root.frozen-record-uuid = root.detail.record-uuid;
+                    root.auth-action        = "view-frozen";
+                    root.show-auth-modal    = true;
+                }
+                on-copy() => {
+                    root.frozen-record-uuid = root.detail.record-uuid;
+                    root.auth-action        = "copy-frozen";
+                    root.show-auth-modal    = true;
+                }
+                on-delete => { root.on-delete-and-back(); }
+                on-close-password => { root.on-close-password(); }
+                compute-lines(text, limit) => { root.compute-lines(text, limit) }
+            }
+        }
+    }
+}
+
+component DomainDetailPanel inherits VerticalLayout {
+    in property <DomainItem>              domain;
+    in property <PasswordResultItem>      password-result;
+    in property <bool>                    password-visible:      false;
+    in-out property <bool>                show-password-card:    false;
+    in property <[CompromisedVersionItem]> compromised-versions: [];
+    in property <int>                     selected-version-index: -1;
+    in property <FrozenDetailItem>        frozen-detail;
+    in property <[RestrictionChoiceItem]> available-restrictions: [];
+
+    // Erros
+    in property <string> error-generate:    "";
+    in property <string> error-compromise:  "";
+    in property <string> error-restriction: "";
+
+    // Estado interno
+    in-out property <bool> show-compromise-confirm:   false;
+    in-out property <bool> show-change-restriction:   false;
+
+    // Callbacks -> Rust
+    callback on-view-password(string /*k1*/, string /*k2*/);
+    callback on-copy-password(string /*k1*/, string /*k2*/);
+    callback on-compromise(string /*k1*/, string /*k2*/);
+    callback on-change-restriction(string /*restriction_uuid*/);
+    callback on-select-version(string /*record_uuid*/);
+    callback on-view-frozen(string /*record_uuid*/, string /*k1*/, string /*k2*/);
+    callback on-copy-frozen(string /*record_uuid*/, string /*k1*/, string /*k2*/);
+    callback on-delete-frozen(string /*record_uuid*/);
+    callback on-remove();
+    callback on-close-password();
+    callback on-open-frozen();
+    pure callback compute-lines(string /*texto*/, int /*chars-por-linha*/) -> [TextLine];
+
+    // "view" | "copy" | "compromise" | "view-frozen" | "copy-frozen"
+    in-out property <string> auth-action:        "";
+    in-out property <bool>   show-auth-modal:    false;
+    in-out property <string> frozen-record-uuid: "";
+
+    alignment: start;
+    spacing:  20px;
+    padding: WindowMetrics.avail-width < 700px ? 12px : 24px;
+
+    property <bool> narrow: WindowMetrics.avail-width < 500px;
+
+    // Cabeçalho
+    HorizontalLayout {
+        spacing:   12px;
+        alignment: start;
+
+        VerticalLayout {
+            alignment: center;
+            IconGlobe { size: 24px; }
+        }
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            spacing: 2px;
+            alignment: center;
+
+            Text {
+                text:        domain.identifier;
+                font-size:   20px;
+                font-weight: 700;
+                color:       Palette.text-heading;
+            }
+
+            HorizontalLayout {
+                spacing: 8px;
+
+                Text {
+                    text:      domain.uuid;
+                    font-size: 11px;
+                    color:     Palette.text-muted;
+                    overflow:  elide;
+                }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 6px;
+
+            StatusBadge {
+                label:   "var. " + domain.active-variation;
+                variant: "info";
+            }
+
+            if domain.compromise-count > 0 : StatusBadge {
+                label:   domain.compromise-count + " hist.";
+                variant: "warning";
+            }
+        }
+    }
+
+    // Restrição associada
+    Rectangle {
+        height:        36px;
+        background:    Palette.bg-panel;
+        border-radius: 6px;
+        border-width:  1px;
+        border-color:  Palette.border;
+
+        HorizontalLayout {
+            padding-left:  12px;
+            padding-right: 12px;
+            spacing:       8px;
+            alignment:     start;
+
+            VerticalLayout {
+                alignment: center;
+                IconLock { size: 13px; }
+            }
+
+            Text {
+                text:               "Restrição: " + domain.restriction-name;
+                font-size:          13px;
+                color:              Palette.text-muted;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+                overflow:           elide;
+            }
+
+            // Botão mudar restrição
+            VerticalLayout {
+                alignment: center;
+                change-r-ta := TouchArea {
+                    width:  70px;
+                    height: 28px;
+                    clicked => { root.show-change-restriction = !root.show-change-restriction; }
+
+                    Rectangle {
+                        border-radius: 5px;
+                        background:    change-r-ta.has-hover ? Palette.bg-hover : transparent;
+                        animate background { duration: 100ms; }
+
+                        Text {
+                            text:                 "Mudar";
+                            font-size:            12px;
+                            color:                Palette.text-muted;
+                            horizontal-alignment: center;
+                            vertical-alignment:   center;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Aviso: mudar restrição 
+    if show-change-restriction : Rectangle {
+        background:    Palette.bg-panel;
+        border-radius: 8px;
+        border-width:  1px;
+        border-color:  Palette.warning;
+
+        VerticalLayout {
+            padding: 16px;
+            spacing: 12px;
+
+            MessageBanner {
+                message: "Mudar a restrição altera a senha gerada! Considere comprometer a senha atual primeiro.";
+                variant: "warning";
+            }
+
+            Text {
+                text:        "Restrições disponíveis";
+                font-size:   13px;
+                font-weight: 700;
+                color:       Palette.text-muted;
+            }
+
+            for r in available-restrictions : Rectangle {
+                height:        40px;
+                border-radius: 6px;
+                border-width:  1px;
+                border-color:  r.is-current ? Palette.accent : Palette.border;
+                background:    r.is-current ? Palette.bg-active : Palette.bg-input;
+
+                r-ta := TouchArea {
+                    enabled: !r.is-current;
+                    clicked => {
+                        root.on-change-restriction(r.uuid);
+                        root.show-change-restriction = false;
+                    }
+                }
+
+                HorizontalLayout {
+                    padding-left:  12px;
+                    padding-right: 12px;
+                    spacing:       8px;
+                    alignment:     start;
+
+                    Text {
+                        text:               r.name;
+                        font-size:          13px;
+                        color:              r.is-current ? Palette.accent : Palette.text-primary;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                    }
+
+                    if r.is-current : VerticalLayout {
+                        alignment: center;
+                        StatusBadge {
+                            label:   "ATUAL";
+                            variant: "info";
+                        }
+                    }
+                }
+            }
+
+            MessageBanner {
+                message: root.error-restriction;
+                variant: "error";
+            }
+
+            HorizontalLayout {
+                alignment: end;
+
+                Button {
+                    text: "Cancelar";
+                    clicked => { root.show-change-restriction = false; }
+                }
+            }
+        }
+    }
+
+    Divider {}
+
+    // Geração de senha
+    Rectangle {
+        background:    Palette.bg-panel;
+        border-radius: 8px;
+        border-width:  1px;
+        border-color:  Palette.border;
+
+        VerticalLayout {
+            padding: 16px;
+            spacing: 12px;
+
+            Text {
+                text:        "Gerar senha";
+                font-size:   13px;
+                font-weight: 700;
+                color:       Palette.text-muted;
+            }
+
+            Divider {}
+
+            MessageBanner {
+                message: root.error-generate;
+                variant: "error";
+            }
+
+            if !root.narrow : HorizontalLayout {
+                spacing: 8px;
+
+                Button {
+                    text:    "Ver senha";
+                    primary: true;
+                    horizontal-stretch: 1;
+                    clicked => {
+                        root.auth-action     = "view";
+                        root.show-auth-modal = true;
+                    }
+                }
+
+                Button {
+                    text:    "Copiar";
+                    horizontal-stretch: 1;
+                    clicked => {
+                        root.auth-action     = "copy";
+                        root.show-auth-modal = true;
+                    }
+                }
+            }
+
+            if root.narrow : VerticalLayout {
+                spacing: 8px;
+
+                Button {
+                    text:    "Ver senha";
+                    primary: true;
+                    width:   100%;
+                    clicked => {
+                        root.auth-action     = "view";
+                        root.show-auth-modal = true;
+                    }
+                }
+
+                Button {
+                    text:    "Copiar";
+                    width:   100%;
+                    clicked => {
+                        root.auth-action     = "copy";
+                        root.show-auth-modal = true;
+                    }
+                }
+            }
+
+            // Resultado da senha (aparece após gerar) - fica sempre visível em texto claro; a única forma de a limpar/zeroizar é o "X" (on-close).
+            if show-password-card : PasswordResultCard {
+                result:      root.password-result;
+                visible-pw:  true;
+                on-copy  => {
+                    root.auth-action     = "copy";
+                    root.show-auth-modal = true;
+                }
+                on-close => {
+                    root.show-password-card = false;
+                    root.on-close-password();
+                }
+                compute-lines(text, limit) => { root.compute-lines(text, limit) }
+            }
+        }
+    }
+
+    // Comprometer senha 
+    Rectangle {
+        background:    #2e2714;
+        border-radius: 8px;
+        border-width:  1px;
+        border-color:  Palette.warning;
+
+        VerticalLayout {
+            padding: 16px;
+            spacing: 12px;
+
+            if !root.narrow : HorizontalLayout {
+                spacing:   8px;
+                alignment: start;
+
+                VerticalLayout {
+                    alignment: center;
+                    IconWarning { size: 16px; }
+                }
+
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 2px;
+
+                    Text {
+                        text:        "Marcar como comprometida";
+                        font-size:   13px;
+                        font-weight: 700;
+                        color:       Palette.warning;
+                    }
+
+                    Text {
+                        text:      "Guarda snapshot da config atual e incrementa a variação. A senha nova será diferente.";
+                        font-size: 11px;
+                        color:     Palette.text-muted;
+                        wrap:      word-wrap;
+                    }
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    comp-toggle-ta := TouchArea {
+                        width:  100px;
+                        height: 40px;
+                        clicked => { root.show-compromise-confirm = !root.show-compromise-confirm; }
+                        Rectangle {
+                            border-radius: 6px;
+                            background:    show-compromise-confirm ? Palette.warning : Palette.bg-hover;
+                            animate background { duration: 150ms; }
+
+                            Text {
+                                text:               show-compromise-confirm ? "Cancelar" : "Comprometer";
+                                font-size:          12px;
+                                font-weight:        600;
+                                color:              show-compromise-confirm ? Palette.bg-base : Palette.text-primary;
+                                horizontal-alignment: center;
+                                vertical-alignment:   center;
+                                animate color { duration: 150ms; }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if root.narrow : VerticalLayout {
+                spacing: 10px;
+
+                HorizontalLayout {
+                    spacing:   8px;
+                    alignment: start;
+
+                    VerticalLayout {
+                        alignment: center;
+                        IconWarning { size: 16px; }
+                    }
+
+                    Text {
+                        text:        "Marcar como comprometida";
+                        font-size:   13px;
+                        font-weight: 700;
+                        color:       Palette.warning;
+                        vertical-alignment: center;
+                    }
+                }
+
+                Text {
+                    text:      "Guarda snapshot da config atual e incrementa a variação. A senha nova será diferente.";
+                    font-size: 11px;
+                    color:     Palette.text-muted;
+                    wrap:      word-wrap;
+                }
+
+                comp-toggle-ta-n := TouchArea {
+                    height: 40px;
+                    clicked => { root.show-compromise-confirm = !root.show-compromise-confirm; }
+                    Rectangle {
+                        border-radius: 6px;
+                        background:    show-compromise-confirm ? Palette.warning : Palette.bg-hover;
+                        animate background { duration: 150ms; }
+
+                        Text {
+                            text:               show-compromise-confirm ? "Cancelar" : "Comprometer";
+                            font-size:          12px;
+                            font-weight:        600;
+                            color:              show-compromise-confirm ? Palette.bg-base : Palette.text-primary;
+                            horizontal-alignment: center;
+                            vertical-alignment:   center;
+                            animate color { duration: 150ms; }
+                        }
+                    }
+                }
+            }
+
+            // Formulário de confirmação
+            if show-compromise-confirm : VerticalLayout {
+                spacing: 10px;
+
+                MessageBanner {
+                    message: root.error-compromise;
+                    variant: "error";
+                }
+
+                HorizontalLayout {
+                    alignment: end;
+
+                    Button {
+                        text:    "Confirmar rotação";
+                        primary: true;
+                        clicked => {
+                            root.auth-action     = "compromise";
+                            root.show-auth-modal = true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Histórico de versões comprometidas 
+    if compromised-versions.length > 0 : Rectangle {
+        background:    Palette.bg-panel;
+        border-radius: 8px;
+        border-width:  1px;
+        border-color:  Palette.border;
+
+        VerticalLayout {
+            padding: 16px;
+            spacing: 10px;
+
+            // Cabeçalho - sempre expandido, sem comportamento de minimizar.
+            Text {
+                text:        "Versões comprometidas (" + compromised-versions.length + ")";
+                font-size:   13px;
+                font-weight: 700;
+                color:       Palette.text-muted;
+            }
+
+            // Lista de versões
+            VerticalLayout {
+                spacing: 4px;
+
+                for v[i] in compromised-versions : CompromisedVersionRow {
+                    item:     v;
+                    selected: i == selected-version-index;
+                    clicked => {
+                        root.on-select-version(v.uuid);
+                        root.on-open-frozen();
+                    }
+                }
+            }
+        }
+    }
+
+    Rectangle {
+        background:    #2e1a1a;
+        border-radius: 8px;
+        border-width:  1px;
+        border-color:  Palette.danger;
+
+        VerticalLayout {
+        if !root.narrow : HorizontalLayout {
+            padding:   16px;
+            spacing:   12px;
+            alignment: start;
+
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: 2px;
+
+                Text {
+                    text:      "Remover domínio";
+                    font-size: 13px;
+                    color:     Palette.danger;
+                    font-weight: 700;
+                }
+
+                Text {
+                    text:      "Remove o domínio e todo o histórico de versões comprometidas. Irreversível.";
+                    font-size: 11px;
+                    color:     Palette.text-muted;
+                    wrap:      word-wrap;
+                }
+            }
+
+            Button {
+                text:    "Remover";
+                clicked => { root.on-remove(); }
+            }
+        }
+
+        if root.narrow : VerticalLayout {
+            padding: 16px;
+            spacing: 10px;
+
+            Text {
+                text:      "Remover domínio";
+                font-size: 13px;
+                color:     Palette.danger;
+                font-weight: 700;
+            }
+
+            Text {
+                text:      "Remove o domínio e todo o histórico de versões comprometidas. Irreversível.";
+                font-size: 11px;
+                color:     Palette.text-muted;
+                wrap:      word-wrap;
+            }
+
+            Button {
+                text:    "Remover";
+                width:   100%;
+                clicked => { root.on-remove(); }
+            }
+        }
+        }
+    }
+}
+
+component AddDomainForm inherits VerticalLayout {
+    in property <string> error: "";
+
+    callback on-submit(string /*identifier*/);
+    callback on-cancel();
+
+    alignment: start;
+    spacing: 20px;
+    padding: WindowMetrics.avail-width < 700px ? 12px : 24px;
+
+    SectionTitle {
+        title:    "Adicionar domínio";
+        subtitle: "Um domínio representa um serviço para o qual será gerada uma senha.";
+    }
+
+    Divider {}
+
+    id-field := LabeledInput {
+        label:       "Identificador";
+        placeholder: "ex: github.com ou google.com";
+        hint:        "Use um nome único e descritivo para este serviço";
+    }
+
+    MessageBanner {
+        message: "A senha será derivada deterministicamente a partir deste identificador, da restrição associada e das suas chaves mestras.";
+        variant: "info";
+    }
+
+    MessageBanner {
+        message: root.error;
+        variant: "error";
+    }
+
+    HorizontalLayout {
+        alignment: end;
+        spacing:   10px;
+
+        Button {
+            text:    "Cancelar";
+            clicked => { root.on-cancel(); }
+        }
+
+        Button {
+            text:    "Criar domínio  ->";
+            primary: true;
+            enabled: id-field.value != "";
+            clicked => { root.on-submit(id-field.value); }
+        }
+    }
+}
+
+export component DomainsView inherits Rectangle {
+    width:      100%;
+    height:     100%;
+    background: Palette.bg-base;
+
+    in property <string>                 restriction-uuid;
+    in property <string>                 restriction-name;
+    in property <bool>                   restriction-has-format: true;
+    in property <string>                 device-name;
+    in property <[DomainItem]>           domains:                [];
+    in property <int>                    selected-index:         -1;
+    in property <DomainItem>             selected-domain;
+    in property <PasswordResultItem>     password-result;
+    in property <bool>                   password-visible:       false;
+    in property <bool>                   show-password-card:     false;
+    in property <[CompromisedVersionItem]> compromised-versions: [];
+    in property <int>                    selected-version-index: -1;
+    in property <FrozenDetailItem>       frozen-detail;
+    in property <[RestrictionChoiceItem]> available-restrictions: [];
+
+    // Erros
+    in property <string> error-add:         "";
+    in property <string> error-generate:    "";
+    in property <string> error-compromise:  "";
+    in property <string> error-restriction: "";
+
+    // Estado interno
+    in-out property <bool> show-add-form: false;
+
+    // Auth modal state (bubbled from DomainDetailPanel)
+    property <bool>   dom-show-auth:       false;
+    property <string> dom-auth-action:     "";
+    property <string> dom-frozen-uuid:     "";
+    property <bool>   dom-show-compromise: false;
+    private property <bool> show-frozen-view: false;
+
+    // Responsividade
+    in property <length> avail-width: 1000px;
+    private property <bool> narrow: root.avail-width < Tokens.mobile-breakpoint;
+
+    // Callbacks -> Rust
+    callback on-select(string /*uuid*/);
+    callback on-add(string /*identifier*/);
+    callback on-view-password(string /*domain_uuid*/, string /*k1*/, string /*k2*/);
+    callback on-copy-password(string /*domain_uuid*/, string /*k1*/, string /*k2*/);
+    callback on-compromise(string /*domain_uuid*/, string /*k1*/, string /*k2*/);
+    callback on-change-restriction(string /*domain_uuid*/, string /*restriction_uuid*/);
+    callback on-select-version(string /*domain_uuid*/, string /*record_uuid*/);
+    callback on-view-frozen(string /*domain_uuid*/, string /*record_uuid*/, string /*k1*/, string /*k2*/);
+    callback on-copy-frozen(string /*domain_uuid*/, string /*record_uuid*/, string /*k1*/, string /*k2*/);
+    callback on-delete-frozen(string /*domain_uuid*/, string /*record_uuid*/);
+    callback on-remove-request(string /*domain_uuid*/);
+    callback on-close-password();
+    callback on-back();
+    pure callback compute-lines(string /*texto*/, int /*chars-por-linha*/) -> [TextLine];
+
+    HorizontalLayout {
+    spacing: 0px;
+
+    dom-sidebar := SidebarBase {
+        avail-width: root.avail-width;
+        flush:       true;
+
+        VerticalLayout {
+            visible: !dom-sidebar.narrow || !dom-sidebar.minimized;
+            spacing: 0px;
+
+            ListHeader {
+                title:       "Domínios";
+                subtitle:    restriction-name;
+                add-active:  show-add-form;
+                add-enabled: root.restriction-has-format;
+                show-toggle: root.narrow;
+                toggle-open: true;
+                toggle => { dom-sidebar.minimized = true; }
+                back   => { root.on-back(); }
+                add    => {
+                    if root.restriction-has-format {
+                        root.show-add-form    = !root.show-add-form;
+                        root.show-frozen-view = false;
+                        if root.show-add-form { root.on-select(""); }
+                        if root.narrow { dom-sidebar.minimized = true; }
+                    }
+                }
+            }
+
+            ScrollView {
+                vertical-stretch:   1;
+                horizontal-stretch: 1;
+
+                VerticalLayout {
+                    padding: 6px;
+                    spacing: 2px;
+
+                    if domains.length == 0 : EmptyState {
+                        title:   "Sem domínios";
+                        message: "Clique em + para adicionar o primeiro domínio.";
+                    }
+
+                    for d[i] in domains : DomainListItem {
+                        identifier:       d.identifier;
+                        variation:        d.active-variation;
+                        compromise-count: d.compromise-count;
+                        selected:         i == selected-index;
+                        clicked => {
+                            root.show-add-form    = false;
+                            root.show-frozen-view = false;
+                            root.on-select(d.uuid);
+                            if root.narrow { dom-sidebar.minimized = true; }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if !show-frozen-view : ScrollView {
+        horizontal-stretch: 1;
+        vertical-stretch:   1;
+
+        VerticalLayout {
+            alignment: start;
+            if show-add-form : AddDomainForm {
+                error:      root.error-add;
+                on-submit(id) => { root.on-add(id); }
+                on-cancel     => { root.show-add-form = false; }
+            }
+
+            if !show-add-form && selected-index >= 0 && !show-frozen-view : DomainDetailPanel {
+                domain:                  root.selected-domain;
+                password-result:         root.password-result;
+                password-visible:        root.password-visible;
+                show-password-card:      root.show-password-card;
+                compromised-versions:    root.compromised-versions;
+                selected-version-index:  root.selected-version-index;
+                frozen-detail:           root.frozen-detail;
+                available-restrictions:  root.available-restrictions;
+                error-generate:          root.error-generate;
+                error-compromise:        root.error-compromise;
+                error-restriction:       root.error-restriction;
+                show-auth-modal         <=>  root.dom-show-auth;
+                auth-action             <=>  root.dom-auth-action;
+                frozen-record-uuid      <=>  root.dom-frozen-uuid;
+                show-compromise-confirm <=>  root.dom-show-compromise;
+
+                on-view-password(k1, k2)     => { root.on-view-password(root.selected-domain.uuid, k1, k2); }
+                on-copy-password(k1, k2)     => { root.on-copy-password(root.selected-domain.uuid, k1, k2); }
+                on-compromise(k1, k2)        => { root.on-compromise(root.selected-domain.uuid, k1, k2); }
+                on-change-restriction(ruuid) => { root.on-change-restriction(root.selected-domain.uuid, ruuid); }
+                on-select-version(ruuid)     => { root.on-select-version(root.selected-domain.uuid, ruuid); }
+                on-open-frozen               => { root.show-frozen-view = true; }
+                on-delete-frozen(ruuid)      => { root.on-delete-frozen(root.selected-domain.uuid, ruuid); }
+                on-remove                    => { root.on-remove-request(root.selected-domain.uuid); }
+                on-close-password            => { root.on-close-password(); }
+                compute-lines(text, limit)   => { root.compute-lines(text, limit) }
+            }
+
+            if !show-add-form && selected-index < 0 : EmptyState {
+                title:   "Selecione um domínio";
+                message: "Escolha um domínio na lista ou clique em + para criar um novo.";
+            }
+        }
+    }
+
+    } 
+
+    FrozenVersionPage {
+        x: dom-sidebar.width;
+        y: 0px;
+        width:  root.width  - dom-sidebar.width;
+        height: root.height;
+        visible: !show-add-form && selected-index >= 0 && show-frozen-view;
+
+        domain:           root.selected-domain;
+        detail:           root.frozen-detail;
+        password-result:  root.password-result;
+        password-visible: root.password-visible;
+        show-password:    root.show-password-card;
+        show-auth-modal    <=> root.dom-show-auth;
+        auth-action        <=> root.dom-auth-action;
+        frozen-record-uuid <=> root.dom-frozen-uuid;
+
+        on-delete-and-back => {
+            root.show-frozen-view = false;
+            root.on-delete-frozen(root.selected-domain.uuid, root.frozen-detail.record-uuid);
+        }
+        on-close-password => { root.on-close-password(); }
+        on-back => {
+            root.show-frozen-view = false;
+            root.on-close-password();
+        }
+        compute-lines(text, limit) => { root.compute-lines(text, limit) }
+    }
+
+    AuthenticationModal {
+        show:       root.dom-show-auth;
+        hw-enabled: false;
+        overlay-extend-top: Tokens.header-height;
+        on-pick-path(_kind, _current) => { "" }
+        closed => { root.dom-show-auth = false; }
+        on-confirm(k1, k2, _k_ext, _xor_a, _xor_b) => {
+            root.dom-show-auth = false;
+            if root.dom-auth-action == "view" {
+                root.on-view-password(root.selected-domain.uuid, k1, k2);
+            } else if root.dom-auth-action == "copy" {
+                root.on-copy-password(root.selected-domain.uuid, k1, k2);
+            } else if root.dom-auth-action == "compromise" {
+                root.on-compromise(root.selected-domain.uuid, k1, k2);
+                root.dom-show-compromise = false;
+            } else if root.dom-auth-action == "view-frozen" {
+                root.on-view-frozen(root.selected-domain.uuid, root.dom-frozen-uuid, k1, k2);
+            } else if root.dom-auth-action == "copy-frozen" {
+                root.on-copy-frozen(root.selected-domain.uuid, root.dom-frozen-uuid, k1, k2);
+            }
+        }
+    }
+}

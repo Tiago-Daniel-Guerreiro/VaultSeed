@@ -1,0 +1,643 @@
+import { Button, ScrollView, CheckBox } from "std-widgets.slint";
+
+import {
+    Palette, Tokens, Divider, LabeledInput, MessageBanner,
+    SectionTitle, StatusBadge, KeyValueRow, EmptyState, CheckboxRow,
+    PathInputRow,
+    IconLock, IconFolder, IconGlobe, IconDevice, IconCheck, IconAsterisk,
+} from "../components/shared_components.slint";
+
+import { AuthenticationModal } from "./login_view.slint";
+import { SidebarBase } from "../components/sidebar_components.slint";
+
+// Espelha SelectionNodeType
+export enum NodeType {
+    Device,
+    Restriction,
+    Folder,
+    DerivedPassword,
+    StaticPassword,
+}
+
+// Nó da árvore de seleção (flat - o Rust constrói a lista plana via flatten_tree_for_display antes de enviar para a UI)
+export struct TreeNodeItem {
+    uuid:       string,
+    label:      string,
+    node-type:  NodeType,
+    selected:   bool,
+    indent:     int,     // 0 = raiz, 1 = filho, 2 = neto
+    has-children: bool,
+}
+
+export struct ExportSummaryItem {
+    device-count:      int,
+    restriction-count: int,
+    domain-count:      int,
+    static-count:      int,
+}
+
+// TREE NODE ROW - linha da árvore de seleção com checkbox e indentação
+component TreeNodeRow inherits Rectangle {
+    in property <TreeNodeItem> node;
+    in property <bool>         enabled: true;
+
+    callback on-toggle();
+
+    height:        36px;
+    border-radius: 4px;
+    background:    node.selected ? Palette.bg-active : ta.has-hover  ? Palette.bg-hover : transparent;
+    animate background { duration: 100ms; }
+
+    ta := TouchArea {
+        enabled: root.enabled;
+        clicked => { root.on-toggle(); }
+    }
+
+    HorizontalLayout {
+        // Indentação dinâmica
+        padding-left:  16px + node.indent * 20px;
+        padding-right: 12px;
+        spacing:       8px;
+        alignment:     start;
+
+        // Checkbox visual
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width:         16px;
+                height:        16px;
+                border-radius: 3px;
+                border-width:  2px;
+                border-color:  node.selected ? Palette.accent : Palette.border;
+                background:    node.selected ? Palette.accent : transparent;
+                animate border-color { duration: 100ms; }
+                animate background   { duration: 100ms; }
+
+                if node.selected : IconCheck {
+                    size:       10px;
+                    icon-color: Palette.bg-base;
+                    x: (parent.width  - self.width)  / 2;
+                    y: (parent.height - self.height) / 2;
+                }
+            }
+        }
+
+        // Ícone por tipo - envolvido em VerticalLayout para centrar verticalmente
+        if node.node-type == NodeType.Device : VerticalLayout {
+            alignment: center;
+            IconDevice { size: 13px; }
+        }
+        if node.node-type == NodeType.Restriction : VerticalLayout {
+            alignment: center;
+            IconLock { size: 13px; }
+        }
+        if node.node-type == NodeType.Folder : VerticalLayout {
+            alignment: center;
+            IconFolder { size: 13px; }
+        }
+        if node.node-type == NodeType.DerivedPassword : VerticalLayout {
+            alignment: center;
+            IconGlobe { size: 13px; }
+        }
+        // Ícone "*" para senhas estáticas - aplica-se a todas (o estado de comprometida nem está disponível em TreeNodeItem).
+        if node.node-type == NodeType.StaticPassword : VerticalLayout {
+            alignment: center;
+            IconAsterisk { size: 13px; }
+        }
+
+        // Label
+        VerticalLayout {
+            alignment:          center;
+            horizontal-stretch: 1;
+
+            Text {
+                text:               node.label;
+                font-size:          13px;
+                font-weight:        node.indent == 0 ? 700 : node.indent == 1 ? 600 : 400;
+                color:              node.selected ? Palette.text-heading : Palette.text-primary;
+                overflow:           elide;
+                animate color { duration: 100ms; }
+            }
+        }
+    }
+}
+
+component FormatSelector inherits HorizontalLayout {
+    // "csv" | "json" | "txt"
+    in-out property <string> format: "csv";
+
+    spacing: 8px;
+
+    for opt in [
+        { id: "csv",  label: "CSV",  hint: "Excel / LibreOffice" },
+        { id: "json", label: "JSON", hint: "Programático"        },
+        { id: "txt",  label: "TXT",  hint: "Legível"             },
+    ] : Rectangle {
+        horizontal-stretch: 1;
+        height:        60px;
+        border-radius: 8px;
+        border-width:  1px;
+        border-color:  format == opt.id ? Palette.accent : Palette.border;
+        background:    format == opt.id ? Palette.bg-active : Palette.bg-input;
+        animate border-color { duration: 120ms; }
+        animate background   { duration: 120ms; }
+
+        opt-ta := TouchArea {
+            clicked => { root.format = opt.id; }
+        }
+
+        VerticalLayout {
+            alignment: center;
+            spacing:   2px;
+            padding:   8px;
+
+            HorizontalLayout {
+                alignment: center;
+                spacing:   6px;
+
+                Text {
+                    text:        opt.label;
+                    font-size:   14px;
+                    font-weight: format == opt.id ? 700 : 400;
+                    color:       format == opt.id ? Palette.accent : Palette.text-primary;
+                    vertical-alignment: center;
+                    animate color { duration: 120ms; }
+                }
+            }
+
+            Text {
+                text:               opt.hint;
+                font-size:          10px;
+                color:              format == opt.id ? Palette.accent : Palette.text-muted;
+                horizontal-alignment: center;
+                animate color { duration: 120ms; }
+            }
+        }
+    }
+}
+
+export component ExportView inherits Rectangle {
+    background: Palette.bg-base;
+    width:      100%;
+    height:     100%;
+
+    // Dados vindos do Rust
+    in property <[TreeNodeItem]>  tree-nodes:    [];
+    in property <ExportSummaryItem> summary;
+    in property <string>          default-path:  "";
+    in property <string>          error:         "";
+    in property <bool>            is-exporting:  false;
+
+    // Seletor de pasta assíncrono
+    in property <string> picked-path: "";
+    in property <int>    pick-seq:    0;
+
+    // Estado interno
+    private property <string>  export-format:       "csv";
+    private property <bool>    include-compromised:  false;
+    private property <bool>    include-metadata:     false;
+    private property <bool>    show-export-auth:     false;
+    private property <bool>    sidebar-minimized:    false;
+
+    // Responsividade
+    in property <length> avail-width: 1000px;
+    property <bool> narrow: root.avail-width < Tokens.mobile-breakpoint;
+
+    // Callbacks -> Rust
+    callback on-toggle-node(int /*flat_index*/);
+    callback on-select-all();
+    callback on-deselect-all();
+    callback on-filter-by-device(int /*device_flat_index*/);
+    callback on-pick-path(string /*kind*/, string /*current*/) -> string;
+
+    // Exportação
+    callback on-export(
+        string, /*file_name - sem extensão*/
+        string, /*folder_path*/
+        string, /*format: "csv"|"json"|"txt"*/
+        bool,   /*include_compromised*/
+        bool,   /*include_metadata*/
+        string, /*k1*/
+        string  /*k2*/
+    );
+
+    callback on-back();
+
+    HorizontalLayout {
+    spacing: 0px;
+
+    export-sidebar := SidebarBase {
+        minimized   <=> root.sidebar-minimized;
+        avail-width:    root.avail-width;
+        title:          "Exportar";
+        no-spacer:      true;
+
+        // Botões "Tudo / Limpar" (ocultos quando minimizado)
+        if !root.sidebar-minimized : HorizontalLayout {
+            spacing: 6px;
+            height: 36px;
+            padding-left: 8px;
+            padding-right: 8px;
+            padding-top: 8px;
+
+            sel-all-btn := Rectangle {
+                horizontal-stretch: 1;
+                border-radius: 5px;
+                background: sel-all-ta.has-hover ? Palette.bg-hover : Palette.bg-panel;
+                sel-all-ta := TouchArea { clicked => { root.on-select-all(); } }
+                Text {
+                    text:       "Tudo";
+                    font-size:  12px;
+                    color:      Palette.text-primary;
+                    horizontal-alignment: center;
+                    vertical-alignment:   center;
+                }
+            }
+
+            desel-btn := Rectangle {
+                horizontal-stretch: 1;
+                border-radius: 5px;
+                background: desel-ta.has-hover ? Palette.bg-hover : Palette.bg-panel;
+                desel-ta := TouchArea { clicked => { root.on-deselect-all(); } }
+                Text {
+                    text:       "Limpar";
+                    font-size:  12px;
+                    color:      Palette.text-muted;
+                    horizontal-alignment: center;
+                    vertical-alignment:   center;
+                }
+            }
+        }
+
+        // Árvore de seleção (oculta quando minimizado)
+        if !root.sidebar-minimized : ScrollView {
+            vertical-stretch:   1;
+            horizontal-stretch: 1;
+
+            VerticalLayout {
+                padding: 6px;
+                spacing: 1px;
+
+                if tree-nodes.length == 0 : EmptyState {
+                    title:   "Sem dados";
+                    message: "Não há dispositivos ou senhas para exportar.";
+                }
+
+                for node[i] in tree-nodes : TreeNodeRow {
+                    node:    node;
+                    enabled: !root.is-exporting;
+                    on-toggle => { root.on-toggle-node(i); }
+                }
+            }
+        }
+
+        if !root.sidebar-minimized : Rectangle {
+            height:     80px;
+            clip:       true;
+            background: Palette.bg-panel;
+            border-width: 0px;
+
+            Rectangle {
+                y:          0px;
+                width:      100%;
+                height:     1px;
+                background: Palette.border;
+            }
+
+            VerticalLayout {
+                    padding: 10px;
+                    spacing: 4px;
+
+                    Text {
+                        text:        "Selecionado";
+                        font-size:   11px;
+                        font-weight: 700;
+                        color:       Palette.text-muted;
+                    }
+
+                    HorizontalLayout {
+                        spacing: 8px;
+
+                        VerticalLayout {
+                            horizontal-stretch: 1;
+                            spacing: 1px;
+
+                            Text {
+                                text:      summary.device-count;
+                                font-size: 14px;
+                                font-weight: 700;
+                                color:     Palette.accent;
+                                horizontal-alignment: center;
+                                overflow:  elide;
+                            }
+                            Text {
+                                text:      "disp.";
+                                font-size: 10px;
+                                color:     Palette.text-muted;
+                                horizontal-alignment: center;
+                                overflow:  elide;
+                            }
+                        }
+
+                        VerticalLayout {
+                            horizontal-stretch: 1;
+                            spacing: 1px;
+
+                            Text {
+                                text:      summary.restriction-count;
+                                font-size: 14px;
+                                font-weight: 700;
+                                color:     Palette.info;
+                                horizontal-alignment: center;
+                                overflow:  elide;
+                            }
+                            Text {
+                                text:      "rest.";
+                                font-size: 10px;
+                                color:     Palette.text-muted;
+                                horizontal-alignment: center;
+                                overflow:  elide;
+                            }
+                        }
+
+                        VerticalLayout {
+                            horizontal-stretch: 1;
+                            spacing: 1px;
+
+                            Text {
+                                text:      summary.domain-count;
+                                font-size: 14px;
+                                font-weight: 700;
+                                color:     Palette.success;
+                                horizontal-alignment: center;
+                                overflow:  elide;
+                            }
+                            Text {
+                                text:      "dom.";
+                                font-size: 10px;
+                                color:     Palette.text-muted;
+                                horizontal-alignment: center;
+                                overflow:  elide;
+                            }
+                        }
+
+                        VerticalLayout {
+                            horizontal-stretch: 1;
+                            spacing: 1px;
+
+                            Text {
+                                text:      summary.static-count;
+                                font-size: 14px;
+                                font-weight: 700;
+                                color:     Palette.warning;
+                                horizontal-alignment: center;
+                                overflow:  elide;
+                            }
+                            Text {
+                                text:      "est.";
+                                font-size: 10px;
+                                color:     Palette.text-muted;
+                                horizontal-alignment: center;
+                                overflow:  elide;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        ScrollView {
+            horizontal-stretch: 1;
+            vertical-stretch:   1;
+
+            VerticalLayout {
+                alignment: start;
+                padding:  root.narrow ? 12px : 24px;
+                spacing:  20px;
+
+                SectionTitle {
+                    title:    "Exportar senhas";
+                    subtitle: "Exporta as senhas selecionadas para um ficheiro em texto claro. Use apenas para migração.";
+                }
+
+                // Aviso de segurança
+                MessageBanner {
+                    message: "O ficheiro exportado contém senhas em TEXTO CLARO. Elimine-o após utilização.";
+                    variant: "warning";
+                }
+
+                Divider {}
+
+                // Formato 
+                VerticalLayout {
+                    spacing: 10px;
+
+                    Text {
+                        text:        "Formato de exportação";
+                        font-size:   13px;
+                        font-weight: 700;
+                        color:       Palette.text-muted;
+                    }
+
+                    fmt-sel := FormatSelector {}
+                }
+
+                Divider {}
+
+                // Destino 
+                VerticalLayout {
+                    spacing: 12px;
+
+                    Text {
+                        text:        "Destino do ficheiro";
+                        font-size:   13px;
+                        font-weight: 700;
+                        color:       Palette.text-muted;
+                    }
+
+                    export-name := LabeledInput {
+                        label:       "Nome do ficheiro (sem extensão)";
+                        placeholder: "ex: export_vaultseed";
+                        hint:        "A extensão será adicionada automaticamente conforme o formato";
+                    }
+
+                    export-folder := PathInputRow {
+                        label:       "Pasta de destino";
+                        placeholder: "Selecione uma pasta";
+                        hint:        "Pasta onde o ficheiro será guardado";
+                        browse => {
+                            let selected = root.on-pick-path("folder", export-folder.value);
+                            if selected != "" { export-folder.value = selected; }
+                        }
+                    }
+
+                    // Preview do caminho final
+                    if export-name.value != "" && export-folder.value != "" : Rectangle {
+                        height:        36px;
+                        background:    Palette.bg-input;
+                        border-radius: 6px;
+                        border-width:  1px;
+                        border-color:  Palette.border;
+
+                        HorizontalLayout {
+                            padding-left:  12px;
+                            padding-right: 12px;
+                            spacing:       6px;
+                            alignment:     start;
+
+                            Text {
+                                text:               export-folder.value + "/" + export-name.value + "." + fmt-sel.format;
+                                font-size:          12px;
+                                color:              Palette.text-muted;
+                                vertical-alignment: center;
+                                overflow:           elide;
+                            }
+                        }
+                    }
+                }
+
+                Divider {}
+
+                VerticalLayout {
+                    spacing: 10px;
+
+                    Text {
+                        text:        "Opções";
+                        font-size:   13px;
+                        font-weight: 700;
+                        color:       Palette.text-muted;
+                    }
+
+                    CheckboxRow {
+                        checked:       include-compromised;
+                        title:         "Incluir versões comprometidas";
+                        subtitle:      "Exporta também o histórico de senhas anteriores";
+                        accent:        Palette.warning;
+                        toggled => { root.include-compromised = !root.include-compromised; }
+                    }
+
+                    CheckboxRow {
+                        checked:       include-metadata;
+                        title:         "Incluir metadados";
+                        subtitle:      "UUIDs, variações, restrições e parâmetros técnicos";
+                        accent:        Palette.info;
+                        toggled => { root.include-metadata = !root.include-metadata; }
+                    }
+                }
+
+                Divider {}
+
+                // Erros
+                MessageBanner {
+                    message: root.error;
+                    variant: "error";
+                }
+
+                // Aviso de segurança + botão de exportação
+                if summary.domain-count + summary.static-count == 0 : MessageBanner {
+                    message: "Selecione pelo menos um domínio ou senha estática para exportar.";
+                    variant: "warning";
+                }
+
+                Rectangle {
+                    border-radius: 8px;
+                    border-width:  1px;
+                    border-color:  is-exporting ? Palette.accent : Palette.border;
+                    background:    is-exporting ? Palette.bg-active : Palette.bg-panel;
+                    animate border-color { duration: 200ms; }
+                    animate background   { duration: 200ms; }
+
+                    VerticalLayout {
+                    if !root.narrow : HorizontalLayout {
+                        padding-left:  20px;
+                        padding-right: 20px;
+                        padding-top:   14px;
+                        padding-bottom: 14px;
+                        spacing:       14px;
+                        alignment:     start;
+
+                        VerticalLayout {
+                            horizontal-stretch: 1;
+                            alignment: center;
+                            spacing: 2px;
+
+                            Text {
+                                text:        is-exporting ? "A exportar..." : "Exportar senhas selecionadas";
+                                font-size:   14px;
+                                font-weight: 700;
+                                color:       is-exporting ? Palette.accent : Palette.text-heading;
+                                animate color { duration: 200ms; }
+                                wrap:        word-wrap;
+                            }
+
+                            Text {
+                                text:      (summary.domain-count + summary.static-count) + " senha(s) · formato " + fmt-sel.format;
+                                font-size: 11px;
+                                color:     Palette.text-muted;
+                            }
+                        }
+
+                        Button {
+                            text:    is-exporting ? "A exportar..." : "Exportar";
+                            primary: true;
+                            enabled: !is-exporting && export-name.value   != "" && export-folder.value != "" && (summary.domain-count + summary.static-count) > 0;
+                            clicked => { root.show-export-auth = true; }
+                        }
+                    }
+
+                    if root.narrow : VerticalLayout {
+                        padding:  16px;
+                        spacing:  10px;
+
+                        Text {
+                            text:        is-exporting ? "A exportar..." : "Exportar senhas selecionadas";
+                            font-size:   14px;
+                            font-weight: 700;
+                            color:       is-exporting ? Palette.accent : Palette.text-heading;
+                            animate color { duration: 200ms; }
+                            wrap:        word-wrap;
+                        }
+
+                        Text {
+                            text:      (summary.domain-count + summary.static-count) + " senha(s) · formato " + fmt-sel.format;
+                            font-size: 11px;
+                            color:     Palette.text-muted;
+                        }
+
+                        Button {
+                            text:    is-exporting ? "A exportar..." : "Exportar";
+                            primary: true;
+                            width:   100%;
+                            enabled: !is-exporting && export-name.value   != "" && export-folder.value != "" && (summary.domain-count + summary.static-count) > 0;
+                            clicked => { root.show-export-auth = true; }
+                        }
+                    }
+                    }
+                }
+            }
+        }
+
+    }
+
+    // Modal de autenticação para exportar
+    AuthenticationModal {
+        show:       root.show-export-auth;
+        error:      root.error;
+        hw-enabled: false;
+        overlay-extend-top: Tokens.header-height;
+        on-pick-path(_kind, _current) => { "" }
+        closed => { root.show-export-auth = false; }
+        on-confirm(k1, k2, _k_ext, _xor_a, _xor_b) => {
+            root.show-export-auth = false;
+            root.on-export(
+                export-name.value,
+                export-folder.value,
+                fmt-sel.format,
+                root.include-compromised,
+                root.include-metadata,
+                k1,
+                k2,
+            );
+        }
+    }
+}

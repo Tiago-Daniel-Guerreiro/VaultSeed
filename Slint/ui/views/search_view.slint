@@ -1,0 +1,153 @@
+import { ScrollView } from "std-widgets.slint";
+
+import {
+    Palette, Tokens, Divider, TextInput, EmptyState, IconGlobe, IconDevice,
+    StatusBadge,
+} from "../components/shared_components.slint";
+
+// kind: "domain" | "static"
+export struct SearchResultItem {
+    kind:             string,
+    uuid:             string,
+    label:            string,
+    subtitle:         string, 
+    compromised:      bool,
+}
+
+export component SearchView inherits Rectangle {
+    in property <[SearchResultItem]> results: [];
+    in property <string> query: "";
+    in property <length> avail-width: 1000px;
+
+    callback on-search(string /*query*/);
+    callback on-select-result(string /*kind*/, string /*uuid*/);
+
+    background: Palette.bg-base;
+    width:  100%;
+    height: 100%;
+
+    VerticalLayout {
+        padding: root.avail-width < 700px ? 12px : 24px;
+        spacing: 16px;
+
+        VerticalLayout {
+            vertical-stretch: 0;
+            spacing: 16px;
+
+            HorizontalLayout {
+                spacing:   12px;
+                alignment: start;
+
+                Text {
+                    text:               "Pesquisa";
+                    font-size:          20px;
+                    font-weight:        700;
+                    color:              Palette.text-heading;
+                    vertical-alignment: center;
+                }
+
+                VerticalLayout {
+                    width: max(160px, min(root.width - 160px, 600px));
+                    alignment: center;
+
+                    search-field := TextInput {
+                        placeholder: "Pesquisar domínio...";
+                        value:       root.query;
+                        edited => { root.on-search(self.value); }
+                    }
+                }
+            }
+
+            Divider {}
+        }
+
+        if root.query != "" && root.results.length == 0 : EmptyState {
+            vertical-stretch: 1;
+            title:   "Sem resultados";
+            message: "Nenhum domínio ou senha estática corresponde a \"" + root.query + "\".";
+        }
+
+        if root.query == "" : EmptyState {
+            vertical-stretch: 1;
+            title:   "Pesquisa global";
+            message: "Começa a escrever para ver os domínios e senhas estáticas mais parecidos.";
+        }
+
+        if root.results.length > 0 : ScrollView {
+            horizontal-stretch: 1;
+            vertical-stretch:   1;
+
+            VerticalLayout {
+                alignment: start;
+                spacing:   6px;
+
+                for r in root.results : Rectangle {
+                    height:        56px;
+                    border-radius: 8px;
+                    border-width:  1px;
+                    border-color:  result-ta.has-hover ? Palette.accent : Palette.border;
+                    background:    result-ta.has-hover ? Palette.bg-hover : Palette.bg-panel;
+                    animate background, border-color { duration: 100ms; }
+
+                    result-ta := TouchArea {
+                        clicked => { root.on-select-result(r.kind, r.uuid); }
+                    }
+
+                    HorizontalLayout {
+                        padding: 12px;
+                        spacing: 10px;
+
+                        VerticalLayout {
+                            alignment: center;
+                            if r.kind == "static" : Text {
+                                text:      r.compromised ? "!" : "*";
+                                font-size: 18px;
+                                color:     r.compromised ? Palette.warning : Palette.text-muted;
+                            }
+                            if r.kind != "static" : IconGlobe { size: 18px; }
+                        }
+
+                        VerticalLayout {
+                            horizontal-stretch: 1;
+                            alignment: center;
+                            spacing:   2px;
+
+                            HorizontalLayout {
+                                spacing: 8px;
+
+                                Text {
+                                    text:               r.label;
+                                    font-size:          13px;
+                                    font-weight:        700;
+                                    color:              Palette.text-heading;
+                                    overflow:           elide;
+                                    horizontal-stretch: 1;
+                                    vertical-alignment: center;
+                                }
+
+                                if r.compromised : StatusBadge {
+                                    label:   "COMPROMETIDA";
+                                    variant: "warning";
+                                }
+                            }
+
+                            HorizontalLayout {
+                                spacing: 6px;
+                                VerticalLayout {
+                                    alignment: center;
+                                    IconDevice { size: 11px; icon-color: Palette.text-muted; }
+                                }
+                                Text {
+                                    text:      r.subtitle;
+                                    font-size: 11px;
+                                    color:     Palette.text-muted;
+                                    overflow:  elide;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

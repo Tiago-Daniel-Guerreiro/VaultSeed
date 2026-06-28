@@ -1,0 +1,71 @@
+name: Update Cargo.lock
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update-lock:
+    name: Update Cargo.lock
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Generate Cargo.lock
+        id: update_lock
+        run: |
+          set -euo pipefail
+
+          rm -f Cargo.lock
+          cargo generate-lockfile -v
+
+          if [ ! -f Cargo.lock ]; then
+            echo "Cargo.lock não foi gerado."
+            exit 1
+          fi
+
+          echo "Cargo.lock gerado com sucesso:"
+          ls -l Cargo.lock
+
+          if git check-ignore -q Cargo.lock; then
+            echo "Cargo.lock está a ser ignorado pelo .gitignore"
+            git check-ignore -v Cargo.lock || true
+            exit 1
+          fi
+
+          echo "Git status do Cargo.lock:"
+          git status --porcelain -- Cargo.lock || true
+
+          if [ -n "$(git status --porcelain -- Cargo.lock)" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create Pull Request if changed
+        if: success() && steps.update_lock.outputs.changed == 'true'
+        # Requires repository setting: allow GitHub Actions to create and approve pull requests.
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ github.token }}
+          base: ${{ github.event.repository.default_branch }}
+          commit-message: "chore(ci): regenerate Cargo.lock"
+          title: "chore(ci): regenerate Cargo.lock"
+          body: |
+            This PR regenerates the Cargo.lock file via automated workflow.
+          branch: "update/cargo-lock-${{ github.run_number }}"
+          delete-branch: true
+          labels: automated, ci
+          add-paths: |
+            Cargo.lock

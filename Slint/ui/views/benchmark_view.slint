@@ -1,0 +1,1021 @@
+import { Button, ScrollView } from "std-widgets.slint";
+
+import {
+    Palette, Tokens, Divider, LabeledInput, MessageBanner,
+    SectionTitle, StatusBadge, KeyValueRow, EmptyState,
+    SidebarToggle, WindowMetrics,
+} from "../components/shared_components.slint";
+
+import { SidebarBase, SidebarGroupLabel, SidebarNavItem } from "../components/sidebar_components.slint";
+
+// STRUCTS DE DADOS
+export struct CalibrationBenchmarkResult {
+    // Parâmetros encontrados
+    m-cost:          int,
+    t-cost:          int,
+    p-cost:          int,
+    // Tempo que o Argon2id demorou com esses parâmetros
+    argon2-ms:       int,
+    // Tempo total da calibração (overhead incluído)
+    total-ms:        int,
+    // Comparação com o alvo
+    // "below" | "within" | "above"
+    comparison:      string,
+    diff-ms:         int,
+    // Alvos usados
+    min-target-ms:   int,
+    max-target-ms:   int,
+}
+
+export struct ExportBenchmarkResult {
+    device-count:       int,
+    domain-count:       int,
+    static-pw-count:    int,
+    setup-ms:           int,
+    prepare-ms:         int,
+    export-ms:          int,
+    generation-ms:      int,
+    total-ms:           int,
+    argon2-m:           int,
+    argon2-t:           int,
+    argon2-p:           int,
+}
+
+component MetricCard inherits Rectangle {
+    in property <string> label;
+    in property <string> value;
+    in property <string> unit:    "";
+    in property <color>  accent-color: Palette.accent;
+    in property <bool>   highlight: false;
+    in property <bool>   compact: false;
+
+    horizontal-stretch: 1;
+    min-height:    root.compact ? 56px : 72px;
+    background:    highlight ? Palette.bg-active : Palette.bg-panel;
+    border-radius: 8px;
+    border-width:  highlight ? 2px : 1px;
+    border-color:  highlight ? root.accent-color : Palette.border;
+    animate border-color { duration: 150ms; }
+    animate background   { duration: 150ms; }
+
+    VerticalLayout {
+        alignment: center;
+        padding:   root.compact ? 8px : 12px;
+        spacing:   root.compact ? 2px : 4px;
+
+        HorizontalLayout {
+            alignment: center;
+            spacing:   4px;
+
+            Text {
+                text:               root.value;
+                font-size:          root.compact ? 15px : 20px;
+                font-weight:        700;
+                color:              root.accent-color;
+                horizontal-alignment: center;
+                vertical-alignment:   center;
+                wrap:               word-wrap;
+            }
+
+            if unit != "" : Text {
+                text:               root.unit;
+                font-size:          root.compact ? 10px : 12px;
+                color:              root.accent-color;
+                vertical-alignment: center;
+                wrap:               word-wrap;
+            }
+        }
+
+        Text {
+            text:               root.label;
+            font-size:          root.compact ? 10px : 11px;
+            color:              Palette.text-muted;
+            horizontal-alignment: center;
+            wrap:               word-wrap;
+        }
+    }
+}
+
+component CalibrationBenchmarkPanel inherits VerticalLayout {
+    in property <CalibrationBenchmarkResult> result;
+    in property <bool>   has-result:  false;
+    in property <bool>   is-running:  false;
+    in property <string> error:       "";
+
+    // Alvos actuais vindos do LocalState (display)
+    in property <string> current-min-ms: "(padrão)";
+    in property <string> current-max-ms: "(padrão)";
+
+    callback on-run();
+
+    property <bool> narrow: WindowMetrics.avail-width < 700px;
+
+    alignment: start;
+    spacing: 20px;
+    padding: root.narrow ? 12px : 24px;
+
+    SectionTitle {
+        title:    "Calibração Argon2id";
+        subtitle: "Encontra os parâmetros Argon2id que atingem o tempo alvo configurado.";
+    }
+
+    // Alvos actuais
+    Rectangle {
+        background:    Palette.bg-panel;
+        border-radius: 8px;
+        border-width:  1px;
+        border-color:  Palette.border;
+
+        VerticalLayout {
+            padding: 16px;
+            spacing: 8px;
+
+            Text {
+                text:        "Alvos de calibração actuais";
+                font-size:   13px;
+                font-weight: 700;
+                color:       Palette.text-muted;
+            }
+
+            Divider {}
+
+            if !root.narrow : HorizontalLayout {
+                spacing: 12px;
+
+                MetricCard {
+                    label: "Mínimo alvo";
+                    value: current-min-ms;
+                    unit:  "ms";
+                    accent-color: Palette.info;
+                }
+
+                MetricCard {
+                    label: "Máximo alvo";
+                    value: current-max-ms;
+                    unit:  "ms";
+                    accent-color: Palette.info;
+                }
+            }
+
+            if root.narrow : VerticalLayout {
+                spacing: 8px;
+
+                MetricCard {
+                    label: "Mínimo alvo";
+                    value: current-min-ms;
+                    unit:  "ms";
+                    accent-color: Palette.info;
+                }
+
+                MetricCard {
+                    label: "Máximo alvo";
+                    value: current-max-ms;
+                    unit:  "ms";
+                    accent-color: Palette.info;
+                }
+            }
+
+            MessageBanner {
+                message: "Para alterar os alvos, vá a Configurações -> Calibração Argon2id.";
+                variant: "info";
+            }
+        }
+    }
+
+    Rectangle {
+        border-radius: 8px;
+        border-width:  1px;
+        border-color:  is-running ? Palette.accent : Palette.border;
+        background:    is-running ? Palette.bg-active : Palette.bg-panel;
+        animate border-color { duration: 200ms; }
+        animate background   { duration: 200ms; }
+
+        VerticalLayout {
+            if !root.narrow : HorizontalLayout {
+                padding-left:  20px;
+                padding-right: 20px;
+                padding-top:   14px;
+                padding-bottom: 14px;
+                spacing:       14px;
+                alignment:     start;
+
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    alignment: center;
+                    spacing: 2px;
+
+                    Text {
+                        text:        is-running ? "A calibrar..." : "Executar calibração";
+                        font-size:   14px;
+                        font-weight: 700;
+                        color:       is-running ? Palette.accent : Palette.text-heading;
+                        animate color { duration: 200ms; }
+                        wrap:        word-wrap;
+                    }
+
+                    Text {
+                        text:      "Pode demorar alguns minutos dependendo da máquina";
+                        font-size: 11px;
+                        color:     Palette.text-muted;
+                        wrap:      word-wrap;
+                    }
+                }
+
+                Button {
+                    text:    is-running ? "A correr..." : "Iniciar";
+                    primary: true;
+                    enabled: !is-running;
+                    clicked => { root.on-run(); }
+                }
+            }
+
+            if root.narrow : VerticalLayout {
+                padding:  14px;
+                spacing:  10px;
+
+                Text {
+                    text:        is-running ? "A calibrar..." : "Executar calibração";
+                    font-size:   14px;
+                    font-weight: 700;
+                    color:       is-running ? Palette.accent : Palette.text-heading;
+                    animate color { duration: 200ms; }
+                    wrap:        word-wrap;
+                }
+
+                Text {
+                    text:      "Pode demorar alguns minutos dependendo da máquina";
+                    font-size: 11px;
+                    color:     Palette.text-muted;
+                    wrap:      word-wrap;
+                }
+
+                Button {
+                    text:    is-running ? "A correr..." : "Iniciar";
+                    primary: true;
+                    enabled: !is-running;
+                    width:   100%;
+                    clicked => { root.on-run(); }
+                }
+            }
+        }
+    }
+
+    MessageBanner {
+        message: root.error;
+        variant: "error";
+    }
+
+    // Resultados
+    if has-result : VerticalLayout {
+        spacing: 12px;
+
+        // Cabeçalho do resultado
+        HorizontalLayout {
+            spacing:   10px;
+            alignment: start;
+
+            Text {
+                text:        "Resultado";
+                font-size:   16px;
+                font-weight: 700;
+                color:       Palette.text-heading;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+            }
+
+            StatusBadge {
+                label:   result.comparison == "within" ? "DENTRO DO ALVO" : result.comparison == "below"  ? "ABAIXO DO ALVO" : "ACIMA DO ALVO";
+                variant: result.comparison == "within" ? "success" : result.comparison == "below"  ? "info" : "warning";
+            }
+        }
+
+        // Parâmetros encontrados
+        Rectangle {
+            background:    Palette.bg-panel;
+            border-radius: 8px;
+            border-width:  1px;
+            border-color:  Palette.success;
+
+            VerticalLayout {
+                padding: 16px;
+                spacing: 12px;
+
+                Text {
+                    text:        "Parâmetros Argon2id";
+                    font-size:   13px;
+                    font-weight: 700;
+                    color:       Palette.text-muted;
+                }
+
+                Divider {}
+
+                if !root.narrow : HorizontalLayout {
+                    spacing: 10px;
+
+                    MetricCard {
+                        label:     "m_cost";
+                        value:     result.m-cost;
+                        unit:      "KiB";
+                        accent-color: Palette.accent;
+                        highlight: true;
+                    }
+
+                    MetricCard {
+                        label:     "t_cost";
+                        value:     result.t-cost;
+                        accent-color: Palette.info;
+                        highlight: true;
+                    }
+
+                    MetricCard {
+                        label:     "p_cost";
+                        value:     result.p-cost;
+                        accent-color: Palette.success;
+                        highlight: true;
+                    }
+                }
+
+                if root.narrow : VerticalLayout {
+                    spacing: 8px;
+
+                    MetricCard {
+                        label:     "m_cost";
+                        value:     result.m-cost;
+                        unit:      "KiB";
+                        accent-color: Palette.accent;
+                        highlight: true;
+                    }
+
+                    MetricCard {
+                        label:     "t_cost";
+                        value:     result.t-cost;
+                        accent-color: Palette.info;
+                        highlight: true;
+                    }
+
+                    MetricCard {
+                        label:     "p_cost";
+                        value:     result.p-cost;
+                        accent-color: Palette.success;
+                        highlight: true;
+                    }
+                }
+            }
+        }
+
+        // Tempos
+        Rectangle {
+            background:    Palette.bg-panel;
+            border-radius: 8px;
+            border-width:  1px;
+            border-color:  Palette.border;
+
+            VerticalLayout {
+                padding: 16px;
+                spacing: 12px;
+
+                Text {
+                    text:        "Tempos medidos";
+                    font-size:   13px;
+                    font-weight: 700;
+                    color:       Palette.text-muted;
+                }
+
+                Divider {}
+
+                if !root.narrow : HorizontalLayout {
+                    spacing: 10px;
+
+                    MetricCard {
+                        label: "Argon2id";
+                        value: result.argon2-ms;
+                        unit:  "ms";
+                        accent-color: Palette.accent;
+                    }
+
+                    MetricCard {
+                        label: "Total (com overhead)";
+                        value: result.total-ms;
+                        unit:  "ms";
+                        accent-color: Palette.text-muted;
+                    }
+
+                    MetricCard {
+                        label: result.comparison == "below"  ? "Abaixo do mín." : result.comparison == "above"  ? "Acima do máx." : "Dentro do intervalo";
+                        value: result.comparison == "within" ? "OK" : result.diff-ms;
+                        unit:  result.comparison == "within" ? "" : "ms";
+                        accent-color: result.comparison == "within" ? Palette.success : result.comparison == "below"  ? Palette.info : Palette.warning;
+                        highlight: true;
+                    }
+                }
+
+                if root.narrow : VerticalLayout {
+                    spacing: 8px;
+
+                    MetricCard {
+                        label: "Argon2id";
+                        value: result.argon2-ms;
+                        unit:  "ms";
+                        accent-color: Palette.accent;
+                    }
+
+                    MetricCard {
+                        label: "Total (com overhead)";
+                        value: result.total-ms;
+                        unit:  "ms";
+                        accent-color: Palette.text-muted;
+                    }
+
+                    MetricCard {
+                        label: result.comparison == "below"  ? "Abaixo do mín." : result.comparison == "above"  ? "Acima do máx." : "Dentro do intervalo";
+                        value: result.comparison == "within" ? "OK" : result.diff-ms;
+                        unit:  result.comparison == "within" ? "" : "ms";
+                        accent-color: result.comparison == "within" ? Palette.success : result.comparison == "below"  ? Palette.info : Palette.warning;
+                        highlight: true;
+                    }
+                }
+            }
+        }
+
+        // Alvos usados
+        Rectangle {
+            background:    Palette.bg-panel;
+            border-radius: 8px;
+            border-width:  1px;
+            border-color:  Palette.border;
+
+            VerticalLayout {
+                padding: 14px;
+                spacing: 8px;
+
+                Text {
+                    text:        "Alvos utilizados";
+                    font-size:   12px;
+                    font-weight: 700;
+                    color:       Palette.text-muted;
+                }
+
+                Divider {}
+
+                KeyValueRow { label: "Mínimo"; value: result.min-target-ms + " ms"; }
+                KeyValueRow { label: "Máximo"; value: result.max-target-ms + " ms"; }
+            }
+        }
+    }
+}
+
+component ExportBenchmarkPanel inherits VerticalLayout {
+    in property <ExportBenchmarkResult> result;
+    in property <bool>   has-result: false;
+    in property <bool>   is-running: false;
+    in property <string> error:      "";
+
+    // Configuração actual (display) vinda do LocalState
+    in property <string> config-devices:  "2 (padrão)";
+    in property <string> config-domains:  "100 (padrão)";
+    in property <string> config-static:   "100 (padrão)";
+    in property <string> config-k1-len:   "12 (padrão)";
+    in property <string> config-k2-len:   "12 (padrão)";
+    in property <string> config-argon2-m: "(mínimo)";
+    in property <string> config-argon2-t: "(mínimo)";
+    in property <string> config-argon2-p: "(mínimo)";
+
+    callback on-run();
+
+    property <bool> narrow: WindowMetrics.avail-width < 700px;
+
+    alignment: start;
+    spacing: 20px;
+    padding: root.narrow ? 12px : 24px;
+
+    SectionTitle {
+        title:    "Benchmark de exportação";
+        subtitle: "Simula a exportação de senhas para medir o tempo de derivação em lote.";
+    }
+
+    // Configuração actual
+    Rectangle {
+        background:    Palette.bg-panel;
+        border-radius: 8px;
+        border-width:  1px;
+        border-color:  Palette.border;
+
+        VerticalLayout {
+            padding: 16px;
+            spacing: 8px;
+
+            Text {
+                text:        "Configuração actual";
+                font-size:   13px;
+                font-weight: 700;
+                color:       Palette.text-muted;
+            }
+
+            Divider {}
+
+            if !root.narrow : HorizontalLayout {
+                spacing: 20px;
+
+                VerticalLayout {
+                    spacing: 6px;
+                    horizontal-stretch: 1;
+
+                    KeyValueRow { label: "Dispositivos";           value: config-devices; }
+                    KeyValueRow { label: "Domínios / dispositivo"; value: config-domains; }
+                    KeyValueRow { label: "Estáticas / disp.";      value: config-static;  }
+                }
+
+                Rectangle {
+                    width:      1px;
+                    background: Palette.border;
+                }
+
+                VerticalLayout {
+                    spacing: 6px;
+                    horizontal-stretch: 1;
+
+                    KeyValueRow { label: "Tamanho K1";  value: config-k1-len;   }
+                    KeyValueRow { label: "Tamanho K2";  value: config-k2-len;   }
+                    KeyValueRow { label: "Argon2 m";    value: config-argon2-m; }
+                    KeyValueRow { label: "Argon2 t";    value: config-argon2-t; }
+                    KeyValueRow { label: "Argon2 p";    value: config-argon2-p; }
+                }
+            }
+
+            if root.narrow : VerticalLayout {
+                spacing: 6px;
+
+                KeyValueRow { label: "Dispositivos";           value: config-devices; }
+                KeyValueRow { label: "Domínios / dispositivo"; value: config-domains; }
+                KeyValueRow { label: "Estáticas / disp.";      value: config-static;  }
+                KeyValueRow { label: "Tamanho K1";             value: config-k1-len;   }
+                KeyValueRow { label: "Tamanho K2";             value: config-k2-len;   }
+                KeyValueRow { label: "Argon2 m";               value: config-argon2-m; }
+                KeyValueRow { label: "Argon2 t";               value: config-argon2-t; }
+                KeyValueRow { label: "Argon2 p";               value: config-argon2-p; }
+            }
+
+            MessageBanner {
+                message: "Para alterar esta configuração, vá a Configurações -> Exportação benchmark.";
+                variant: "info";
+            }
+        }
+    }
+
+    Rectangle {
+        border-radius: 8px;
+        border-width:  1px;
+        border-color:  is-running ? Palette.accent : Palette.border;
+        background:    is-running ? Palette.bg-active : Palette.bg-panel;
+        animate border-color { duration: 200ms; }
+        animate background   { duration: 200ms; }
+
+        VerticalLayout {
+        if !root.narrow : HorizontalLayout {
+            padding-left:  20px;
+            padding-right: 20px;
+            padding-top:   14px;
+            padding-bottom: 14px;
+            spacing:       14px;
+            alignment:     start;
+
+            VerticalLayout {
+                horizontal-stretch: 1;
+                alignment: center;
+                spacing: 2px;
+
+                Text {
+                    text:        is-running ? "A executar benchmark..." : "Executar benchmark de exportação";
+                    font-size:   14px;
+                    font-weight: 700;
+                    color:       is-running ? Palette.accent : Palette.text-heading;
+                    animate color { duration: 200ms; }
+                    wrap:        word-wrap;
+                }
+
+                Text {
+                    text:      "Simula derivação + desencriptação de todas as senhas";
+                    font-size: 11px;
+                    color:     Palette.text-muted;
+                    wrap:      word-wrap;
+                }
+            }
+
+            Button {
+                text:    is-running ? "A correr..." : "Iniciar";
+                primary: true;
+                enabled: !is-running;
+                clicked => { root.on-run(); }
+            }
+        }
+
+        if root.narrow : VerticalLayout {
+            padding:  14px;
+            spacing:  10px;
+
+            Text {
+                text:        is-running ? "A executar benchmark..." : "Executar benchmark de exportação";
+                font-size:   14px;
+                font-weight: 700;
+                color:       is-running ? Palette.accent : Palette.text-heading;
+                animate color { duration: 200ms; }
+                wrap:        word-wrap;
+            }
+
+            Text {
+                text:      "Simula derivação + desencriptação de todas as senhas";
+                font-size: 11px;
+                color:     Palette.text-muted;
+                wrap:      word-wrap;
+            }
+
+            Button {
+                text:    is-running ? "A correr..." : "Iniciar";
+                primary: true;
+                enabled: !is-running;
+                width:   100%;
+                clicked => { root.on-run(); }
+            }
+        }
+    }
+
+    MessageBanner {
+        message: root.error;
+        variant: "error";
+    }
+
+    // Resultados
+    if has-result : Rectangle {
+        border-radius: 8px;
+        border-width:  1px;
+        border-color:  Palette.border;
+
+        VerticalLayout {
+        padding: 16px;
+        spacing: 12px;
+
+        Text {
+            text:        "Resultado";
+            font-size:   16px;
+            font-weight: 700;
+            color:       Palette.text-heading;
+        }
+
+        // Volume simulado
+        Rectangle {
+            background:    Palette.bg-panel;
+            border-radius: 8px;
+            border-width:  1px;
+            border-color:  Palette.border;
+
+            VerticalLayout {
+                padding: 16px;
+                spacing: 12px;
+
+                Text {
+                    text:        "Volume simulado";
+                    font-size:   13px;
+                    font-weight: 700;
+                    color:       Palette.text-muted;
+                }
+
+                Divider {}
+
+                if !root.narrow : HorizontalLayout {
+                    spacing: 10px;
+
+                    MetricCard {
+                        label: "Dispositivos";
+                        value: result.device-count;
+                        accent-color: Palette.accent;
+                    }
+
+                    MetricCard {
+                        label: "Domínios totais";
+                        value: result.domain-count;
+                        accent-color: Palette.info;
+                    }
+
+                    MetricCard {
+                        label: "Estáticas totais";
+                        value: result.static-pw-count;
+                        accent-color: Palette.success;
+                    }
+                }
+
+                if root.narrow : VerticalLayout {
+                    spacing: 8px;
+
+                    MetricCard {
+                        label: "Dispositivos";
+                        value: result.device-count;
+                        accent-color: Palette.accent;
+                    }
+
+                    MetricCard {
+                        label: "Domínios totais";
+                        value: result.domain-count;
+                        accent-color: Palette.info;
+                    }
+
+                    MetricCard {
+                        label: "Estáticas totais";
+                        value: result.static-pw-count;
+                        accent-color: Palette.success;
+                    }
+                }
+            }
+        }
+
+        // Tempos por fase
+        Rectangle {
+            background:    Palette.bg-panel;
+            border-radius: 8px;
+            border-width:  1px;
+            border-color:  Palette.border;
+
+            VerticalLayout {
+                padding: 16px;
+                spacing: 12px;
+
+                Text {
+                    text:        "Tempos por fase";
+                    font-size:   13px;
+                    font-weight: 700;
+                    color:       Palette.text-muted;
+                }
+
+                Divider {}
+
+                if !root.narrow : HorizontalLayout {
+                    spacing: 10px;
+
+                    MetricCard {
+                        label: "Setup";
+                        value: result.setup-ms;
+                        unit:  "ms";
+                        accent-color: Palette.text-muted;
+                        compact: true;
+                    }
+
+                    MetricCard {
+                        label: "Preparação";
+                        value: result.prepare-ms;
+                        unit:  "ms";
+                        accent-color: Palette.info;
+                        compact: true;
+                    }
+
+                    MetricCard {
+                        label:     "Derivação";
+                        value:     result.export-ms;
+                        unit:      "ms";
+                        accent-color: Palette.accent;
+                        highlight: true;
+                        compact: true;
+                    }
+
+                    MetricCard {
+                        label: "Geração";
+                        value: result.generation-ms;
+                        unit:  "ms";
+                        accent-color: Palette.warning;
+                        compact: true;
+                    }
+
+                    MetricCard {
+                        label: "Total";
+                        value: result.total-ms;
+                        unit:  "ms";
+                        accent-color: Palette.success;
+                        compact: true;
+                    }
+                }
+
+                if root.narrow : VerticalLayout {
+                    spacing: 10px;
+
+                    Text { text: "Setup"; font-size: 11px; color: Palette.text-muted; }
+                    MetricCard {
+                        label: "";
+                        value: result.setup-ms;
+                        unit:  "ms";
+                        accent-color: Palette.text-muted;
+                        compact: true;
+                    }
+
+                    Text { text: "Preparação"; font-size: 11px; color: Palette.text-muted; }
+                    MetricCard {
+                        label: "";
+                        value: result.prepare-ms;
+                        unit:  "ms";
+                        accent-color: Palette.info;
+                        compact: true;
+                    }
+
+                    Text { text: "Derivação"; font-size: 11px; color: Palette.text-muted; }
+                    MetricCard {
+                        label:     "";
+                        value:     result.export-ms;
+                        unit:      "ms";
+                        accent-color: Palette.accent;
+                        highlight: true;
+                        compact: true;
+                    }
+
+                    Text { text: "Geração"; font-size: 11px; color: Palette.text-muted; }
+                    MetricCard {
+                        label: "";
+                        value: result.generation-ms;
+                        unit:  "ms";
+                        accent-color: Palette.warning;
+                        compact: true;
+                    }
+
+                    Text { text: "Total"; font-size: 11px; color: Palette.text-muted; }
+                    MetricCard {
+                        label: "";
+                        value: result.total-ms;
+                        unit:  "ms";
+                        accent-color: Palette.success;
+                        compact: true;
+                    }
+                }
+
+                Text {
+                    text:      "\"Geração\" é a fatia de \"Derivação\" gasta só a transformar os bits derivados em senha (sem incluir Argon2id/KMAC).";
+                    font-size: 11px;
+                    color:     Palette.text-muted;
+                    wrap:      word-wrap;
+                }
+            }
+        }
+
+        // Parâmetros Argon2 usados
+        Rectangle {
+            background:    Palette.bg-panel;
+            border-radius: 8px;
+            border-width:  1px;
+            border-color:  Palette.border;
+
+            VerticalLayout {
+                padding: 14px;
+                spacing: 8px;
+
+                Text {
+                    text:        "Parâmetros Argon2id usados";
+                    font-size:   12px;
+                    font-weight: 700;
+                    color:       Palette.text-muted;
+                }
+
+                Divider {}
+
+                if !root.narrow : HorizontalLayout {
+                    spacing: 24px;
+
+                    KeyValueRow { label: "m_cost"; value: result.argon2-m + " KiB"; }
+                    KeyValueRow { label: "t_cost"; value: result.argon2-t; }
+                    KeyValueRow { label: "p_cost"; value: result.argon2-p; }
+                }
+
+                if root.narrow : VerticalLayout {
+                    spacing: 6px;
+
+                    KeyValueRow { label: "m_cost"; value: result.argon2-m + " KiB"; }
+                    KeyValueRow { label: "t_cost"; value: result.argon2-t; }
+                    KeyValueRow { label: "p_cost"; value: result.argon2-p; }
+                }
+            }
+        }
+        }
+    }
+}
+}
+
+export component BenchmarkView inherits HorizontalLayout {
+
+    // Dados vindos do Rust 
+    in property <CalibrationBenchmarkResult> calibration-result;
+    in property <bool>                       calibration-has-result: false;
+    in property <bool>                       calibration-running:    false;
+
+    in property <ExportBenchmarkResult>      export-result;
+    in property <bool>                       export-has-result: false;
+    in property <bool>                       export-running:    false;
+
+    // Display da config actual (passado do LocalState)
+    in property <string> current-min-ms:    "(padrão)";
+    in property <string> current-max-ms:    "(padrão)";
+    in property <string> config-devices:    "2 (padrão)";
+    in property <string> config-domains:    "100 (padrão)";
+    in property <string> config-static:     "100 (padrão)";
+    in property <string> config-k1-len:     "12 (padrão)";
+    in property <string> config-k2-len:     "12 (padrão)";
+    in property <string> config-argon2-m:   "(mínimo)";
+    in property <string> config-argon2-t:   "(mínimo)";
+    in property <string> config-argon2-p:   "(mínimo)";
+
+    // Erros 
+    in property <string> error-calibration: "";
+    in property <string> error-export:      "";
+
+    // Painel activo
+    in-out property <int> active-panel: 0;
+
+    // Responsividade
+    in property <length> avail-width: 1000px;
+
+    // Callbacks -> Rust
+    callback on-run-calibration();
+    callback on-run-export();
+    callback on-open-settings();
+
+    spacing: 0px;
+
+    // SIDEBAR INTERNA
+    bm-sidebar := SidebarBase {
+        avail-width: root.avail-width;
+        title:       "Benchmark";
+
+        if !bm-sidebar.narrow || !bm-sidebar.minimized : VerticalLayout {
+            spacing: 6px;
+            alignment: start;
+            padding: 8px;
+
+            SidebarGroupLabel { label: "BENCHMARK"; }
+            SidebarNavItem {
+                label:    "Calibração Argon2id";
+                sublabel: calibration-running   ? "A correr..."
+                        : calibration-has-result ? "Resultado disponível"
+                        : "Pronto para executar";
+                active:   root.active-panel == 0;
+                clicked => {
+                    root.active-panel = 0;
+                    if bm-sidebar.narrow { bm-sidebar.minimized = true; }
+                }
+            }
+            SidebarNavItem {
+                label:    "Exportação";
+                sublabel: export-running   ? "A correr..."
+                        : export-has-result ? "Resultado disponível"
+                        : "Pronto para executar";
+                active:   root.active-panel == 1;
+                clicked => {
+                    root.active-panel = 1;
+                    if bm-sidebar.narrow { bm-sidebar.minimized = true; }
+                }
+            }
+
+            Rectangle { vertical-stretch: 1; }
+
+            Rectangle {
+                height: 1px;
+                background: Palette.border;
+            }
+
+            SidebarNavItem {
+                label:  "Configurações";
+                active: false;
+                clicked => { root.on-open-settings(); }
+            }
+        }
+    }
+
+    // ÁREA DE CONTEÚDO 
+    ScrollView {
+        horizontal-stretch: 1;
+        vertical-stretch:   1;
+
+        VerticalLayout {
+            alignment: start;
+            if active-panel == 0 : CalibrationBenchmarkPanel {
+                result:          root.calibration-result;
+                has-result:      root.calibration-has-result;
+                is-running:      root.calibration-running;
+                error:           root.error-calibration;
+                current-min-ms:  root.current-min-ms;
+                current-max-ms:  root.current-max-ms;
+
+                on-run => { root.on-run-calibration(); }
+            }
+
+            if active-panel == 1 : ExportBenchmarkPanel {
+                result:          root.export-result;
+                has-result:      root.export-has-result;
+                is-running:      root.export-running;
+                error:           root.error-export;
+                config-devices:  root.config-devices;
+                config-domains:  root.config-domains;
+                config-static:   root.config-static;
+                config-k1-len:   root.config-k1-len;
+                config-k2-len:   root.config-k2-len;
+                config-argon2-m: root.config-argon2-m;
+                config-argon2-t: root.config-argon2-t;
+                config-argon2-p: root.config-argon2-p;
+
+                on-run => { root.on-run-export(); }
+            }
+        }
+    }
+}

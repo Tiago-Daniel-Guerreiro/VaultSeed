@@ -1,0 +1,272 @@
+name: "Release (Quirk)"
+
+on:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ===========================================================================
+  # LINUX + WINDOWS - builds nativos (perfil "reduced")
+  # ===========================================================================
+  build_release:
+    name: Build quirk release for ${{ matrix.target }}
+    timeout-minutes: 45
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: VaultSeed.exe
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact_name: VaultSeed
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Normalize line endings (Windows)
+      if: runner.os == 'Windows'
+      run: git config --global core.autocrlf false
+      shell: bash
+
+    # Dependências de sistema para Slint no Linux
+    - name: Install Slint system dependencies (Linux)
+      if: runner.os == 'Linux'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          libxcb-shape0-dev \
+          libxcb-xfixes0-dev \
+          libxkbcommon-dev \
+          libfontconfig1-dev \
+          libegl1-mesa-dev \
+          libgles2-mesa-dev
+
+    - name: Rust Cache
+      uses: Swatinem/rust-cache@v2
+      with:
+        key: quirk-${{ matrix.target }}
+
+    - name: Install Rust target
+      run: rustup target add ${{ matrix.target }}
+
+    - name: Build Release
+      run: cargo build --locked --release --target ${{ matrix.target }} --features desktop
+
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ matrix.target }}-quirk-release
+        path: target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
+        if-no-files-found: error
+
+  # ===========================================================================
+  # ANDROID APK (aarch64-linux-android)
+  # ===========================================================================
+  build_android_apk:
+    name: Build Android APK
+    timeout-minutes: 45
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: quirk-android-apk
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang
+
+      - name: Install Rust target
+        run: rustup target add aarch64-linux-android
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk
+
+      - name: Setup Android NDK
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r27c
+          local-cache: true
+
+      - name: Install Android SDK platform and set ANDROID_JAR
+        run: |
+          echo "y" | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platforms;android-34"
+
+          ANDROID_JAR_PATH="$ANDROID_HOME/platforms/android-34/android.jar"
+          if [ ! -f "$ANDROID_JAR_PATH" ]; then
+            echo "ERROR: android.jar not found at $ANDROID_JAR_PATH"
+            ls -la "$ANDROID_HOME/platforms/" || echo "platforms dir missing"
+            exit 1
+          fi
+
+          echo "Found: $ANDROID_JAR_PATH"
+          echo "ANDROID_JAR=$ANDROID_JAR_PATH" >> $GITHUB_ENV
+
+      - name: Build Rust shared library
+        run: |
+          cargo ndk \
+            --platform 34 \
+            --target aarch64-linux-android \
+            -- build --locked --release --lib --features android
+          mkdir -p android/app/src/main/jniLibs/arm64-v8a
+          cp target/aarch64-linux-android/release/libvaultseed.so \
+             android/app/src/main/jniLibs/arm64-v8a/libvaultseed.so
+
+      - name: Assemble APK
+        run: |
+          cd android
+          sh ./gradlew assembleRelease
+
+      - name: Locate APK
+        run: |
+          echo "=== APKs gerados ==="
+          find . -name "*.apk" | sort
+
+          APK_PATH=$(find . -name "*.apk" | head -n 1)
+
+          if [ -z "$APK_PATH" ]; then
+            echo "ERROR: Nenhum APK encontrado"
+            exit 1
+          fi
+
+          echo "APK encontrado: $APK_PATH"
+          cp "$APK_PATH" android-release.apk
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk-quirk-release
+          path: android-release.apk
+          if-no-files-found: error
+
+  # ===========================================================================
+  # WASM EXTENSION (wasm32-extension)
+  # ===========================================================================
+  build_wasm_extension:
+    name: Build WASM extension
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: quirk-wasm32-extension
+
+      - name: Install Slint system dependencies (host)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev \
+            libxkbcommon-dev \
+            libfontconfig1-dev \
+            libegl1-mesa-dev \
+            libwayland-dev \
+            pkg-config
+
+      - name: Install Rust target
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: cargo install wasm-pack
+
+      - name: Build extension
+        run: |
+          wasm-pack build --target web --release --no-default-features \
+            --features extension --out-dir Extension/pkg
+
+      - name: Package extension artifact
+        run: |
+          cd Extension/pkg
+          zip -r ../../vaultseed-extension-wasm32.zip .
+
+      - name: Upload Extension Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wasm32-extension-quirk-release
+          path: vaultseed-extension-wasm32.zip
+          if-no-files-found: error
+
+  # ===========================================================================
+  # PUBLISH
+  # ===========================================================================
+  publish:
+    name: Create Quirk Release
+    needs: [build_release, build_android_apk, build_wasm_extension]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Configure Git
+      run: |
+        git config --global user.name "github-actions[bot]"
+        git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+    - name: Bump Version and Export
+      id: version_handler
+      run: |
+        set -e
+        OLD_VERSION=$(grep '^version' Cargo.toml | head -n1 | cut -d '"' -f2)
+        IFS='.' read -r major minor patch <<< "$OLD_VERSION"
+        NEW_PATCH=$((patch + 1))
+        NEW_VERSION="$major.$minor.$NEW_PATCH"
+
+        sed -i "s/^version = \"$OLD_VERSION\"/version = \"$NEW_VERSION\"/" Cargo.toml
+
+        cargo update -p vaultseed --precise "$NEW_VERSION"
+
+        echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+      shell: bash
+
+    - name: Commit & Push Version Change
+      run: |
+        git add Cargo.toml Cargo.lock
+        git commit -m "chore: bump version to v${{ steps.version_handler.outputs.new_version }} [skip ci]"
+        git push origin main
+      shell: bash
+
+    - name: Download All Artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: all-artifacts
+
+    - name: Prepare Artifacts for Release
+      run: |
+        mkdir release-files
+        cp all-artifacts/x86_64-pc-windows-msvc-quirk-release/VaultSeed.exe release-files/VaultSeed-windows-x64.exe
+        cp all-artifacts/x86_64-unknown-linux-gnu-quirk-release/VaultSeed release-files/VaultSeed-linux-x64
+        cp all-artifacts/android-apk-quirk-release/android-release.apk release-files/VaultSeed-android-arm64-v8a.apk
+        cp all-artifacts/wasm32-extension-quirk-release/vaultseed-extension-wasm32.zip release-files/VaultSeed-extension-wasm32.zip
+      shell: bash
+
+    - name: Create or Overwrite Release
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: quirk-v${{ steps.version_handler.outputs.new_version }}
+        name: Quirk Release v${{ steps.version_handler.outputs.new_version }}
+        files: |
+          release-files/VaultSeed-windows-x64.exe
+          release-files/VaultSeed-linux-x64
+          release-files/VaultSeed-android-arm64-v8a.apk
+          release-files/VaultSeed-extension-wasm32.zip
+        draft: false
+        prerelease: false

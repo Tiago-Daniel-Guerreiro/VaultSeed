@@ -1,0 +1,67 @@
+name: "Cargo Clippy Fix"
+
+on:
+  workflow_dispatch:
+
+jobs:
+  clippy-fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-registry-${{ runner.os }}-v1
+
+      - name: Run cargo clippy --fix
+        run: |
+          set -e
+          # Executa o clippy com fix; opções podem ser ajustadas manualmente
+          cargo clippy --workspace --all-targets -- -D warnings || true
+          # Aplica sugestões automáticas (nota: clippy --fix modifica código)
+          cargo clippy --workspace --all-targets --fix --allow-dirty -- -D warnings || true
+          # Verifica a build após as modificações
+          cargo check --workspace --all-targets
+        shell: bash
+
+      - name: Create branch & commit fixes (if any)
+        id: commit
+        run: |
+          set -e
+          if git status --porcelain | grep -q .; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            BRANCH=auto/cargo-clippy-fix-$(date -u +%Y%m%d%H%M%S)
+            git checkout -b "$BRANCH"
+            git add -A
+            git commit -m "chore: apply cargo clippy --fix (automated)"
+            git push --set-upstream origin "$BRANCH"
+            echo "created_branch=$BRANCH" >> $GITHUB_OUTPUT
+          else
+            echo "no_changes=true" >> $GITHUB_OUTPUT
+          fi
+        shell: bash
+
+      - name: Create Pull Request
+        if: steps.commit.outputs.no_changes != 'true'
+        uses: peter-evans/create-pull-request@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "chore: apply cargo clippy --fix (automated)"
+          branch: ${{ steps.commit.outputs.created_branch }}
+          title: "chore: apply cargo clippy --fix"
+          body: |
+            This PR applies automated `cargo clippy --fix` suggestions.
+            Clippy fixes can be opinionated; please review carefully and run CI before merging.
+          labels: automated, maintenance

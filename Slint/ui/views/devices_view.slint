@@ -1,0 +1,1109 @@
+import { Button, LineEdit, ScrollView, ComboBox } from "std-widgets.slint";
+
+import {
+    Palette, Tokens, Divider, LabeledInput, MessageBanner,
+    Card, SectionTitle, StatusBadge, KeyValueRow,
+    EmptyState, ConfirmDialog, LoadingOverlay, AddToggleButton,
+    SidebarToggle, WindowMetrics, IconDevice, IconEdit,
+} from "../components/shared_components.slint";
+
+import { AuthenticationModal } from "./login_view.slint";
+
+import { ConfigurationSidebar } from "../components/sidebar_components.slint";
+
+// STRUCTS DE DADOS - espelham os modelos Rust via #[derive(Data)]
+export struct DeviceItem {
+    uuid:            string,
+    name:            string,
+    argon2-m:        int,    // m_cost_kib
+    argon2-t:        int,    // t_cost
+    argon2-p:        int,    // p_cost
+    salt-hex:        string,
+    seed-nonce-hex:  string,
+    seed-cipher-len: int,
+    restriction-count: int,
+    domain-count:    int,
+    static-pw-count: int,
+    static-folder-count: int,
+}
+
+component DeviceListItem inherits Rectangle {
+    in property <string> name;
+    in property <string> uuid;
+    in property <int>    domain-count;
+    in property <int>    static-pw-count;
+    in property <bool>   selected: false;
+
+    callback clicked;
+
+    height:        52px;
+    border-radius: 6px;
+    background:    selected     ? Palette.bg-active : ta.has-hover ? Palette.bg-hover : transparent;
+
+    animate background { duration: 120ms; }
+
+    ta := TouchArea { clicked => { root.clicked(); } }
+
+    // Indicador lateral de selecionado
+    Rectangle {
+        x:             0px;
+        y:             (parent.height - self.height) / 2;
+        width:         3px;
+        height:        24px;
+        border-radius: 2px;
+        background:    root.selected ? Palette.accent : transparent;
+        animate background { duration: 150ms; }
+    }
+
+    HorizontalLayout {
+        padding-left:  12px;
+        padding-right: 8px;
+        spacing:       8px;
+        alignment:     start;
+
+        // Ícone - envolvido em VerticalLayout para centrar verticalmente
+        VerticalLayout {
+            alignment: center;
+            IconDevice { size: 18px; }
+        }
+
+        // Nome + senhas
+        VerticalLayout {
+            alignment:          center;
+            horizontal-stretch: 1;
+            spacing:            2px;
+
+            Text {
+                text:        root.name;
+                font-size:   13px;
+                font-weight: root.selected ? 700 : 400;
+                color:       root.selected ? Palette.text-heading : Palette.text-primary;
+                overflow:    elide;
+                animate color { duration: 120ms; }
+            }
+
+            Text {
+                text:      (root.domain-count + root.static-pw-count) + " Senha(s)";
+                font-size: 11px;
+                color:     Palette.text-muted;
+            }
+        }
+
+        // Seta se selecionado
+        Text {
+            text:               root.selected ? ">" : "";
+            color:              Palette.accent;
+            font-size:          18px;
+            vertical-alignment: center;
+        }
+    }
+}
+
+component DeviceDetailPanel inherits VerticalLayout {
+    in property <DeviceItem> device;
+    in property <bool> content-narrow: false;
+
+    // Controlo de sub-painéis
+    in-out property <bool> show-rename-form:  false;
+    in-out property <bool> show-argon2-form:  false;
+    in-out property <bool> show-nonce-form:   false;
+
+    // Valor em edição no campo de nome (cabeçalho)
+    private property <string> rename-value: "";
+
+    // Dados dos formulários de edição
+    in property <string>   rename-error:  "";
+    in property <string>   argon2-error:  "";
+    in property <string>   nonce-error:   "";
+
+    in-out property <string> pending-calibration-m: "";
+    in-out property <string> pending-calibration-t: "";
+    in-out property <string> pending-calibration-p: "";
+    in property <bool> calibrating: false;
+
+    // Callbacks de navegação
+    callback go-to-restrictions();
+    callback go-to-static-passwords();
+    callback on-open-calibration();
+
+    // Callbacks de acção (Rust trata a lógica)
+    callback on-rename(string /*new_name*/);
+    callback on-edit-argon2(string /*m*/, string /*t*/, string /*p*/);
+    callback on-edit-nonce(string /*nonce_hex_or_empty*/);
+    callback on-regenerate-salt();
+    callback on-remove();
+    callback on-export-seed();
+
+    alignment: start;
+    spacing:  20px;
+    padding: WindowMetrics.avail-width < 700px ? 12px : 24px;
+
+    // Cabeçalho do dispositivo
+    HorizontalLayout {
+        spacing:   12px;
+        alignment: start;
+
+        VerticalLayout {
+            alignment: center;
+            IconDevice { size: 24px; }
+        }
+
+        VerticalLayout {
+            spacing:            2px;
+            horizontal-stretch: 1;
+            alignment:          center;
+
+            if !root.show-rename-form : HorizontalLayout {
+                spacing:   6px;
+                alignment: start;
+
+                Text {
+                    text:        device.name;
+                    font-size:   20px;
+                    font-weight: 700;
+                    color:       Palette.text-heading;
+                    overflow:    elide;
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width:  26px;
+                        height: 26px;
+                        border-radius: 6px;
+                        background: edit-ta.has-hover ? Palette.bg-hover : transparent;
+
+                        edit-ta := TouchArea {
+                            clicked => {
+                                root.rename-value     = device.name;
+                                root.show-rename-form = true;
+                            }
+                        }
+
+                        IconEdit { size: 13px; icon-color: Palette.text-muted; }
+                    }
+                }
+            }
+
+            if root.show-rename-form : HorizontalLayout {
+                spacing: 6px;
+
+                LineEdit {
+                    text <=> root.rename-value;
+                    horizontal-stretch: 1;
+                    accepted => {
+                        if root.rename-value != "" {
+                            root.on-rename(root.rename-value);
+                        }
+                        root.show-rename-form = false;
+                    }
+                }
+
+                Button {
+                    text:    "Guardar";
+                    primary: true;
+                    enabled: root.rename-value != "";
+                    clicked => {
+                        root.on-rename(root.rename-value);
+                        root.show-rename-form = false;
+                    }
+                }
+
+                Button {
+                    text:    "Cancelar";
+                    clicked => { root.show-rename-form = false; }
+                }
+            }
+
+            if root.show-rename-form && root.rename-error != "" : Text {
+                text:      root.rename-error;
+                font-size: 11px;
+                color:     Palette.danger;
+                wrap:      word-wrap;
+            }
+
+            Text {
+                text:      device.uuid;
+                font-size: 11px;
+                color:     Palette.text-muted;
+                overflow:  elide;
+            }
+        }
+    }
+
+    Divider {}
+
+    if !root.content-narrow : HorizontalLayout {
+        spacing: 10px;
+
+        Button {
+            text:    "Restrições  (" + device.restriction-count + ")";
+            primary: true;
+            horizontal-stretch: 1;
+            clicked => { root.go-to-restrictions(); }
+        }
+
+        Button {
+            text:    "Pastas de senhas estáticas  (" + device.static-folder-count + ")";
+            horizontal-stretch: 1;
+            clicked => { root.go-to-static-passwords(); }
+        }
+    }
+
+    if root.content-narrow : VerticalLayout {
+        spacing: 10px;
+
+        Button {
+            text:    "Restrições  (" + device.restriction-count + ")";
+            primary: true;
+            clicked => { root.go-to-restrictions(); }
+        }
+
+        Button {
+            text:    "Pastas de senhas estáticas  (" + device.static-folder-count + ")";
+            clicked => { root.go-to-static-passwords(); }
+        }
+    }
+
+    // Resumo de estatísticas 
+    HorizontalLayout {
+        spacing: 10px;
+
+        // Card domínios
+        Rectangle {
+            horizontal-stretch: 1;
+            height:        64px;
+            background:    Palette.bg-panel;
+            border-radius: 8px;
+            border-width:  1px;
+            border-color:  Palette.border;
+
+            VerticalLayout {
+                alignment: center;
+                padding:   12px;
+                spacing:   2px;
+
+                Text {
+                    text:               device.domain-count;
+                    font-size:          22px;
+                    font-weight:        700;
+                    color:              Palette.accent;
+                    horizontal-alignment: center;
+                }
+                Text {
+                    text:               "domínios";
+                    font-size:          11px;
+                    color:              Palette.text-muted;
+                    horizontal-alignment: center;
+                }
+            }
+        }
+
+        // Card senhas estáticas
+        Rectangle {
+            horizontal-stretch: 1;
+            height:        64px;
+            background:    Palette.bg-panel;
+            border-radius: 8px;
+            border-width:  1px;
+            border-color:  Palette.border;
+
+            VerticalLayout {
+                alignment: center;
+                padding:   12px;
+                spacing:   2px;
+
+                Text {
+                    text:               device.static-pw-count;
+                    font-size:          22px;
+                    font-weight:        700;
+                    color:              Palette.success;
+                    horizontal-alignment: center;
+                }
+                Text {
+                    text:               "estáticas";
+                    font-size:          11px;
+                    color:              Palette.text-muted;
+                    horizontal-alignment: center;
+                }
+            }
+        }
+    }
+
+    // Configuração técnica 
+    Rectangle {
+        background:    Palette.bg-panel;
+        border-radius: 8px;
+        border-width:  1px;
+        border-color:  Palette.border;
+
+        VerticalLayout {
+            padding: 16px;
+            spacing: 10px;
+
+            Text {
+                text:        "Configuração";
+                font-size:   13px;
+                font-weight: 700;
+                color:       Palette.text-muted;
+            }
+
+            Divider {}
+
+            KeyValueRow { label: "Salt (hex)";      value: device.salt-hex;        copyable: true; force-stacked: true; }
+            KeyValueRow { label: "Argon2id m_cost"; value: device.argon2-m + " KiB";               force-stacked: true; }
+            KeyValueRow { label: "Argon2id t_cost"; value: device.argon2-t;                        force-stacked: true; }
+            KeyValueRow { label: "Argon2id p_cost"; value: device.argon2-p;                        force-stacked: true; }
+            KeyValueRow { label: "Nonce seed";      value: device.seed-nonce-hex;  copyable: true; force-stacked: true; }
+            KeyValueRow {
+                label: "Ciphertext seed";
+                value: device.seed-cipher-len + " bytes";
+                force-stacked: true;
+            }
+        }
+    }
+
+    // Formulário: Editar Argon2 
+    if show-argon2-form : Rectangle {
+        background:    Palette.bg-panel;
+        border-radius: 8px;
+        border-width:  1px;
+        border-color:  Palette.border;
+
+        VerticalLayout {
+            padding: 16px;
+            spacing: 12px;
+
+            property <string> local-pending-m: root.pending-calibration-m;
+            property <string> local-pending-t: root.pending-calibration-t;
+            property <string> local-pending-p: root.pending-calibration-p;
+
+            Text {
+                text:        "Alterar Argon2id + Salt";
+                font-size:   14px;
+                font-weight: 700;
+                color:       Palette.text-heading;
+            }
+
+            MessageBanner {
+                message: "Alterar estes parâmetros regenera o salt. As senhas derivadas NÃO mudam.";
+                variant: "warning";
+            }
+
+            argon2-m := LabeledInput {
+                label:       "m_cost (KiB)";
+                placeholder: device.argon2-m;
+                hint:        "Mínimo: 65536";
+            }
+            argon2-t := LabeledInput {
+                label:       "t_cost";
+                placeholder: device.argon2-t;
+                hint:        "Mínimo: 3";
+            }
+            argon2-p := LabeledInput {
+                label:       "p_cost";
+                placeholder: device.argon2-p;
+                hint:        "Mínimo: 4";
+            }
+
+            changed local-pending-m => { if self.local-pending-m != "" { argon2-m.value = self.local-pending-m; } }
+            changed local-pending-t => { if self.local-pending-t != "" { argon2-t.value = self.local-pending-t; } }
+            changed local-pending-p => { if self.local-pending-p != "" { argon2-p.value = self.local-pending-p; } }
+
+            MessageBanner {
+                message: argon2-error;
+                variant: "error";
+            }
+
+            HorizontalLayout {
+                alignment: end;
+                spacing:   8px;
+
+                Button {
+                    text:    "Cancelar";
+                    clicked => { root.show-argon2-form = false; }
+                }
+                Button {
+                    text:    root.calibrating ? "A calibrar..." : "Calibrar";
+                    enabled: !root.calibrating;
+                    clicked => { root.on-open-calibration(); }
+                }
+                Button {
+                    text:    "Aplicar";
+                    primary: true;
+                    clicked => {
+                        root.on-edit-argon2(
+                            argon2-m.value == "" ? device.argon2-m : argon2-m.value,
+                            argon2-t.value == "" ? device.argon2-t : argon2-t.value,
+                            argon2-p.value == "" ? device.argon2-p : argon2-p.value,
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    // Formulário: Editar Nonce 
+    if show-nonce-form : Rectangle {
+        background:    Palette.bg-panel;
+        border-radius: 8px;
+        border-width:  1px;
+        border-color:  Palette.border;
+
+        VerticalLayout {
+            padding: 16px;
+            spacing: 12px;
+
+            Text {
+                text:        "Alterar Nonce da Seed";
+                font-size:   14px;
+                font-weight: 700;
+                color:       Palette.text-heading;
+            }
+
+            nonce-field := LabeledInput {
+                label:       "Nonce (hex 24 bytes)";
+                placeholder: "Deixe vazio para gerar automaticamente";
+                hint:        nonce-error != "" ? nonce-error : "Opcional - vazio = novo nonce aleatório";
+                has-error:   nonce-error != "";
+            }
+
+            HorizontalLayout {
+                alignment: end;
+                spacing:   8px;
+
+                Button {
+                    text:    "Cancelar";
+                    clicked => { root.show-nonce-form = false; }
+                }
+                Button {
+                    text:    "Aplicar";
+                    primary: true;
+                    clicked => { root.on-edit-nonce(nonce-field.value); }
+                }
+            }
+        }
+    }
+
+    // Zona de acções 
+    Rectangle {
+        background:    Palette.bg-panel;
+        border-radius: 8px;
+        border-width:  1px;
+        border-color:  Palette.border;
+
+        VerticalLayout {
+            padding: 16px;
+            spacing: 8px;
+
+            Text {
+                text:        "Acções";
+                font-size:   13px;
+                font-weight: 700;
+                color:       Palette.text-muted;
+            }
+
+            Divider {}
+
+            if !root.content-narrow : HorizontalLayout {
+                spacing: 8px;
+
+                Button {
+                    text:    "Argon2 + Salt";
+                    horizontal-stretch: 1;
+                    clicked => {
+                        root.show-argon2-form  = !root.show-argon2-form;
+                        root.show-nonce-form   = false;
+                    }
+                }
+
+                Button {
+                    text:    "Nonce seed";
+                    horizontal-stretch: 1;
+                    clicked => {
+                        root.show-nonce-form   = !root.show-nonce-form;
+                        root.show-argon2-form  = false;
+                    }
+                }
+
+                Button {
+                    text:    "Regenerar salt";
+                    horizontal-stretch: 1;
+                    clicked => { root.on-regenerate-salt(); }
+                }
+            }
+
+            if root.content-narrow : VerticalLayout {
+                spacing: 8px;
+
+                Button {
+                    text:    "Argon2 + Salt";
+                    clicked => {
+                        root.show-argon2-form  = !root.show-argon2-form;
+                        root.show-nonce-form   = false;
+                    }
+                }
+
+                Button {
+                    text:    "Nonce seed";
+                    clicked => {
+                        root.show-nonce-form   = !root.show-nonce-form;
+                        root.show-argon2-form  = false;
+                    }
+                }
+
+                Button {
+                    text:    "Regenerar salt";
+                    clicked => { root.on-regenerate-salt(); }
+                }
+            }
+        }
+    }
+
+    Rectangle {
+        background:    #2e1a1a;
+        border-radius: 6px;
+        border-width:  1px;
+        border-color:  Palette.danger;
+
+        VerticalLayout {
+        if !root.content-narrow : HorizontalLayout {
+            padding:   12px;
+            spacing:   12px;
+            alignment: start;
+
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: 2px;
+
+                Text {
+                    text:      "Remover dispositivo";
+                    font-size: 13px;
+                    color:     Palette.danger;
+                    font-weight: 700;
+                }
+                Text {
+                    text:      "Remove o dispositivo e todos os dados associados. Irreversível.";
+                    font-size: 11px;
+                    color:     Palette.text-muted;
+                    wrap:      word-wrap;
+                }
+            }
+
+            Button {
+                text:    "Remover";
+                clicked => { root.on-remove(); }
+            }
+        }
+
+        if root.content-narrow : VerticalLayout {
+            padding: 12px;
+            spacing: 10px;
+
+            Text {
+                text:      "Remover dispositivo";
+                font-size: 13px;
+                color:     Palette.danger;
+                font-weight: 700;
+            }
+            Text {
+                text:      "Remove o dispositivo e todos os dados associados. Irreversível.";
+                font-size: 11px;
+                color:     Palette.text-muted;
+                wrap:      word-wrap;
+            }
+
+            Button {
+                text:    "Remover";
+                width:   100%;
+                clicked => { root.on-remove(); }
+            }
+        }
+        }
+    }
+}
+
+component AddDeviceForm inherits VerticalLayout {
+    in property <string>  default-argon2-m: "65536";
+    in property <string>  default-argon2-t: "3";
+    in property <string>  default-argon2-p: "4";
+    in property <string>  error:            "";
+
+    // "random" | "plaintext" | "encrypted"
+    in-out property <string> seed-source: "random";
+
+    private property <string> seed-val: "";
+
+    changed seed-source => { root.seed-val = ""; }
+
+    callback on-submit(
+        string, /*name*/
+        string, /*argon2_m*/
+        string, /*argon2_t*/
+        string, /*argon2_p*/
+        string, /*salt_hex - vazio = gerar*/
+        string, /*seed_source: "random"|"plaintext"|"encrypted"*/
+        string  /*seed_value - hex ou json, vazio se random*/
+    );
+    callback on-cancel();
+
+    alignment: start;
+    spacing: 20px;
+    padding: WindowMetrics.avail-width < 700px ? 12px : 24px;
+
+    SectionTitle {
+        title:    "Adicionar dispositivo";
+        subtitle: "Cria um novo dispositivo e associa-o à sessão atual.";
+    }
+
+    Divider {}
+
+    // Nome 
+    name-field := LabeledInput {
+        label:       "Nome do dispositivo";
+        placeholder: "ex: Laptop Principal";
+        hint:        "Identificador único para este dispositivo";
+    }
+
+
+    // Salt personalizado (opcional) 
+    salt-field := LabeledInput {
+        label:       "Salt personalizado (opcional)";
+        placeholder: "hex de 32 bytes - vazio para gerar automaticamente";
+        hint:        "Deixe vazio para gerar um salt aleatório";
+    }
+
+    // Fonte da seed 
+    Rectangle {
+        background:    Palette.bg-panel;
+        border-radius: 8px;
+        border-width:  1px;
+        border-color:  Palette.border;
+
+        VerticalLayout {
+            padding: 16px;
+            spacing: 12px;
+
+            Text {
+                text:        "Fonte da seed";
+                font-size:   13px;
+                font-weight: 700;
+                color:       Palette.text-muted;
+            }
+
+            // Seletor de fonte - 3 botões tipo radio
+            HorizontalLayout {
+                spacing: 8px;
+
+                // Aleatória
+                seed-random-btn := Rectangle {
+                    horizontal-stretch: 1;
+                    height:        40px;
+                    border-radius: 6px;
+                    border-width:  1px;
+                    border-color:  seed-source == "random" ? Palette.accent : Palette.border;
+                    background:    seed-source == "random" ? Palette.bg-active : Palette.bg-input;
+                    animate border-color { duration: 120ms; }
+                    animate background   { duration: 120ms; }
+
+                    TouchArea {
+                        clicked => { root.seed-source = "random"; }
+                    }
+                    Text {
+                        text:               "Aleatória";
+                        font-size:          13px;
+                        color:              seed-source == "random" ? Palette.accent : Palette.text-muted;
+                        horizontal-alignment: center;
+                        vertical-alignment:   center;
+                        animate color { duration: 120ms; }
+                    }
+                }
+
+                // Plaintext hex
+                seed-plain-btn := Rectangle {
+                    horizontal-stretch: 1;
+                    height:        40px;
+                    border-radius: 6px;
+                    border-width:  1px;
+                    border-color:  seed-source == "plaintext" ? Palette.accent : Palette.border;
+                    background:    seed-source == "plaintext" ? Palette.bg-active : Palette.bg-input;
+                    animate border-color { duration: 120ms; }
+                    animate background   { duration: 120ms; }
+
+                    TouchArea {
+                        clicked => { root.seed-source = "plaintext"; }
+                    }
+                    Text {
+                        text:               "Hex / Ficheiro";
+                        font-size:          13px;
+                        color:              seed-source == "plaintext" ? Palette.accent : Palette.text-muted;
+                        horizontal-alignment: center;
+                        vertical-alignment:   center;
+                        animate color { duration: 120ms; }
+                    }
+                }
+
+            }
+
+            if seed-source == "plaintext" : LabeledInput {
+                value <=> root.seed-val;
+                label:       "Seed (hex 32 bytes ou caminho)";
+                placeholder: "0x... ou /caminho/ficheiro.bin";
+                hint:        "Ficheiro binário de 32 bytes ou string hex";
+            }
+
+            // Aviso para seed aleatória
+            if seed-source == "random" : MessageBanner {
+                message: "Uma seed criptograficamente aleatória será gerada automaticamente.";
+                variant: "info";
+            }
+        }
+    }
+
+    // Erros 
+    MessageBanner {
+        message: root.error;
+        variant: "error";
+    }
+
+    // Botões 
+    HorizontalLayout {
+        alignment: end;
+        spacing:   10px;
+
+        Button {
+            text:    "Cancelar";
+            clicked => { root.on-cancel(); }
+        }
+
+        Button {
+            text:    "Criar dispositivo  ->";
+            primary: true;
+            enabled: name-field.value != "";
+            clicked => {
+                root.on-submit(
+                    name-field.value,
+                    root.default-argon2-m,
+                    root.default-argon2-t,
+                    root.default-argon2-p,
+                    salt-field.value,
+                    root.seed-source,
+                    root.seed-source == "plaintext" ? root.seed-val : ""
+                );
+            }
+        }
+    }
+}
+
+export component DevicesView inherits Rectangle {
+    width:      100%;
+    height:     100%;
+    background: Palette.bg-base;
+
+    // Dados vindos do Rust
+    in property <[DeviceItem]> devices:          [];
+    in property <int>          selected-index:   -1;  // -1 = nenhum
+    in property <DeviceItem>   selected-device;
+    in property <string>       default-argon2-m: "65536";
+    in property <string>       default-argon2-t: "3";
+    in property <string>       default-argon2-p: "4";
+
+    in-out property <string> pending-calibration-m: "";
+    in-out property <string> pending-calibration-t: "";
+    in-out property <string> pending-calibration-p: "";
+    in property <bool> calibrating: false;
+
+    // Calibração obrigatória antes de criar um dispositivo (resultado vindo do modal de calibração global).
+    in property <int>    calibration-add-seq: 0;
+    in property <string> calibration-add-m: "";
+    in property <string> calibration-add-t: "";
+    in property <string> calibration-add-p: "";
+    callback on-request-calibration-for-add();
+
+    changed calibration-add-seq => {
+        root.dev-pending-m   = root.calibration-add-m;
+        root.dev-pending-t   = root.calibration-add-t;
+        root.dev-pending-p   = root.calibration-add-p;
+        root.dev-auth-action = "add";
+        root.dev-show-auth   = true;
+    }
+
+    // Erros por operação
+    in property <string> error-rename:  "";
+    in property <string> error-argon2:  "";
+    in property <string> error-nonce:   "";
+    in property <string> error-add:     "";
+
+    in property <length> avail-width: 1000px;
+    property <bool> narrow: root.avail-width < Tokens.mobile-breakpoint;
+    in-out property <bool> sidebar-open: !root.narrow;
+
+    property <bool> content-narrow: root.narrow || (root.avail-width - Tokens.list-col-width) < 480px;
+
+    // Estado interno
+    in-out property <bool> show-add-form:     false;
+    private property <bool> show-rename-form: false;
+    private property <bool> show-argon2-form: false;
+    private property <bool> show-nonce-form:  false;
+
+    // Auth modal state
+    private property <bool>   dev-show-auth:    false;
+    private property <string> dev-auth-action:  "";
+    private property <string> dev-pending-uuid: "";
+    private property <string> dev-pending-m:    "";
+    private property <string> dev-pending-t:    "";
+    private property <string> dev-pending-p:    "";
+    private property <string> dev-pending-nonce: "";
+    private property <string> dev-pending-name:  "";
+    private property <string> dev-pending-salt:  "";
+    private property <string> dev-pending-src:   "";
+    private property <string> dev-pending-val:   "";
+
+    // Erros de autenticação
+    in property <string> error-auth: "";
+
+    // Callbacks  ->  Rust
+    callback on-select(string /*uuid*/);
+
+    // Adicionar
+    callback on-add-device(
+        string, /*name*/
+        string, /*argon2_m*/
+        string, /*argon2_t*/
+        string, /*argon2_p*/
+        string, /*salt_hex*/
+        string, /*seed_source*/
+        string, /*seed_value*/
+        string, /*k1*/
+        string  /*k2*/
+    );
+
+    // Edição
+    callback on-rename(string /*uuid*/, string /*new_name*/);
+    callback on-edit-argon2(string /*uuid*/, string /*m*/, string /*t*/, string /*p*/, string /*k1*/, string /*k2*/);
+    callback on-edit-nonce(string /*uuid*/, string /*nonce_hex_or_empty*/, string /*k1*/, string /*k2*/);
+    callback on-regenerate-salt(string /*uuid*/, string /*k1*/, string /*k2*/);
+
+    // Remoção
+    callback on-remove-request(string /*uuid*/);   // abre ConfirmDialog no Rust
+
+    // Navegação
+    callback on-go-restrictions(string /*device_uuid*/);
+    callback on-go-static-passwords(string /*device_uuid*/);
+    callback on-open-calibration();
+
+    HorizontalLayout {
+    spacing: 0px;
+
+    ConfigurationSidebar {
+        narrow:     root.narrow;
+        collapsed:  !root.sidebar-open;
+        open-width: Tokens.list-col-width;
+        full-width: root.avail-width;
+        bg: Palette.bg-sidebar;
+
+        // Tira colapsada (mobile fechado) - só o botão para reabrir
+        if root.narrow && !root.sidebar-open : VerticalLayout {
+            padding-top: 8px;
+            alignment:   start;
+            HorizontalLayout {
+                alignment: center;
+                height:    Tokens.nav-item-height;
+                SidebarToggle { open: false; clicked => { root.sidebar-open = true; } }
+            }
+        }
+
+        if root.sidebar-open || !root.narrow : VerticalLayout {
+            spacing: 0px;
+
+            // Cabeçalho da coluna
+            Rectangle {
+                height:     Tokens.header-height;
+                background: Palette.bg-panel;
+
+                Rectangle {
+                    y:          parent.height - 1px;
+                    width:      100%;
+                    height:     1px;
+                    background: Palette.border;
+                }
+
+                HorizontalLayout {
+                    padding-left:  root.narrow ? 8px : 16px;
+                    padding-right: 10px;
+                    spacing:       8px;
+                    alignment:     start;
+
+                    if root.narrow : VerticalLayout {
+                        alignment: center;
+                        SidebarToggle {
+                            open: true;
+                            clicked => { root.sidebar-open = false; }
+                        }
+                    }
+
+                    Text {
+                        text:               "Dispositivos";
+                        font-size:          Tokens.fs-column;
+                        font-weight:        700;
+                        color:              Palette.text-heading;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                    }
+
+                    // Botão de adicionar
+                    VerticalLayout {
+                        alignment: center;
+                        AddToggleButton {
+                            active: show-add-form;
+                            clicked => {
+                                root.show-add-form = !root.show-add-form;
+                                // Limpa seleção ao abrir o form
+                                if root.show-add-form { root.on-select(""); }
+                                if root.narrow { root.sidebar-open = false; }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Lista de dispositivos
+            ScrollView {
+                vertical-stretch:   1;
+                horizontal-stretch: 1;
+
+                VerticalLayout {
+                    padding:  6px;
+                    spacing:  2px;
+
+                    if devices.length == 0 : EmptyState {
+                        title:        "Sem dispositivos";
+                        message:      "Clique em + para adicionar o primeiro dispositivo.";
+                    }
+
+                    for dev[i] in devices : DeviceListItem {
+                        name:            dev.name;
+                        uuid:            dev.uuid;
+                        domain-count:    dev.domain-count;
+                        static-pw-count: dev.static-pw-count;
+                        selected:        i == selected-index;
+                        clicked => {
+                            root.show-add-form    = false;
+                            root.show-rename-form = false;
+                            root.show-argon2-form = false;
+                            root.show-nonce-form  = false;
+                            root.on-select(dev.uuid);
+                            // Em mobile, fecha a lista para mostrar o detalhe
+                            if root.narrow { root.sidebar-open = false; }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    ScrollView {
+        horizontal-stretch: 1;
+        vertical-stretch:   1;
+
+        VerticalLayout {
+            alignment: start;
+            if show-add-form : AddDeviceForm {
+                default-argon2-m: root.default-argon2-m;
+                default-argon2-t: root.default-argon2-t;
+                default-argon2-p: root.default-argon2-p;
+                error:            root.error-add;
+
+                on-submit(name, m, t, p, salt, src, val) => {
+                    root.dev-pending-name = name;
+                    root.dev-pending-m    = m;
+                    root.dev-pending-t    = t;
+                    root.dev-pending-p    = p;
+                    root.dev-pending-salt = salt;
+                    root.dev-pending-src  = src;
+                    root.dev-pending-val  = val;
+                    root.on-request-calibration-for-add();
+                }
+                on-cancel => {
+                    root.show-add-form = false;
+                }
+            }
+
+            // Painel de detalhe do dispositivo selecionado
+            if !show-add-form && selected-index >= 0 : DeviceDetailPanel {
+                device:           root.selected-device;
+                content-narrow:   root.content-narrow;
+                show-rename-form: root.show-rename-form;
+                show-argon2-form: root.show-argon2-form;
+                show-nonce-form:  root.show-nonce-form;
+                rename-error:     root.error-rename;
+                argon2-error:     root.error-argon2;
+                nonce-error:      root.error-nonce;
+                pending-calibration-m <=> root.pending-calibration-m;
+                pending-calibration-t <=> root.pending-calibration-t;
+                pending-calibration-p <=> root.pending-calibration-p;
+                calibrating:      root.calibrating;
+
+                go-to-restrictions      => { root.on-go-restrictions(root.selected-device.uuid); }
+                go-to-static-passwords  => { root.on-go-static-passwords(root.selected-device.uuid); }
+                on-open-calibration     => { root.on-open-calibration(); }
+
+                on-rename(name)         => { root.on-rename(root.selected-device.uuid, name); }
+                on-edit-argon2(m, t, p) => {
+                    root.dev-pending-uuid = root.selected-device.uuid;
+                    root.dev-pending-m    = m;
+                    root.dev-pending-t    = t;
+                    root.dev-pending-p    = p;
+                    root.dev-auth-action  = "edit-argon2";
+                    root.dev-show-auth    = true;
+                }
+                on-edit-nonce(nonce) => {
+                    root.dev-pending-uuid  = root.selected-device.uuid;
+                    root.dev-pending-nonce = nonce;
+                    root.dev-auth-action   = "edit-nonce";
+                    root.dev-show-auth     = true;
+                }
+                on-regenerate-salt => {
+                    root.dev-pending-uuid = root.selected-device.uuid;
+                    root.dev-auth-action  = "regen-salt";
+                    root.dev-show-auth    = true;
+                }
+                on-remove               => { root.on-remove-request(root.selected-device.uuid); }
+            }
+
+            // Estado vazio - nenhum dispositivo selecionado e form fechado
+            if !show-add-form && selected-index < 0 : EmptyState {
+                title:        "Selecione um dispositivo";
+                message:      "Escolha um dispositivo na lista ou clique em + para criar um novo.";
+            }
+        }
+    }
+    }
+
+    // Modal de autenticação para operações de dispositivo
+    AuthenticationModal {
+        show:       root.dev-show-auth;
+        error:      root.error-auth;
+        hw-enabled: false;
+        overlay-extend-top: Tokens.header-height;
+        on-pick-path(_kind, _current) => { "" }
+        closed => { root.dev-show-auth = false; }
+        on-confirm(k1, k2, _k_ext, _xor_a, _xor_b) => {
+            root.dev-show-auth = false;
+            if root.dev-auth-action == "add" {
+                root.on-add-device(
+                    root.dev-pending-name, root.dev-pending-m, root.dev-pending-t,
+                    root.dev-pending-p, root.dev-pending-salt, root.dev-pending-src,
+                    root.dev-pending-val, k1, k2,
+                );
+            } else if root.dev-auth-action == "edit-argon2" {
+                root.on-edit-argon2(root.dev-pending-uuid, root.dev-pending-m, root.dev-pending-t, root.dev-pending-p, k1, k2);
+            } else if root.dev-auth-action == "edit-nonce" {
+                root.on-edit-nonce(root.dev-pending-uuid, root.dev-pending-nonce, k1, k2);
+            } else if root.dev-auth-action == "regen-salt" {
+                root.on-regenerate-salt(root.dev-pending-uuid, k1, k2);
+            }
+            root.dev-auth-action = "";
+        }
+    }
+}

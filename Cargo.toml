@@ -1,0 +1,100 @@
+[workspace]
+members = ["Core", "Console", "Slint", "Gui"]
+
+[package]
+name = "vaultseed"
+version = "0.5.4"
+edition = "2021"
+
+[package.metadata]
+bin_name = "VaultSeed"
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false
+
+[[bin]]
+name = "VaultSeed"
+path = "src/main.rs"
+
+[features] 
+console = [] # Uso: cargo run --features console
+
+# Base para Android - só Slint + backend android, sem clipboard
+android = ["dep:slint", "dep:vaultseed-slint", "dep:vaultseed-gui", "vaultseed-slint/android", "vaultseed-gui/android"]
+
+# Clipboard - ativado pelo desktop, mas a crate arboard só existe em targets não-wasm/não-android (ver secção target abaixo).
+clipboard = ["vaultseed-gui/clipboard", "vaultseed-console/clipboard"]
+
+# Desktop - inclui android (Slint) + clipboard + dialogo de ficheiros nativo
+desktop = ["android", "clipboard", "vaultseed-console/desktop", "vaultseed-gui/desktop"] # Uso: cargo build --features desktop
+
+# Extension - GUI Slint compilada para wasm32 (extensão de browser).
+# Uso: wasm-pack build --target web --release --out-dir Wasm/extension/pkg --no-default-features --features extension
+extension = ["dep:slint", "dep:vaultseed-slint", "dep:vaultseed-gui", "dep:wasm-bindgen", "dep:console_error_panic_hook", "dep:web-sys"]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+
+# Core
+vaultseed-core    = { path = "Core" }
+
+# UI/Slint - opcionais, activadas pelos features `android` e `desktop`
+vaultseed-slint   = { path = "Slint", optional = true }
+vaultseed-gui     = { path = "Gui",   optional = true }
+slint             = { version = "1.16.1", optional = true }
+
+# Random
+# getrandom: fonte de entropia do SO (substitui rand::rngs::OsRng, removido na geração rand 0.10). Usado diretamente via getrandom::fill.
+getrandom         = "0.4.2"
+
+# Serialization
+serde_json        = "1.0.150"
+
+# IDs
+uuid              = { version = "1.23.2",   features = ["v4", "serde"] }
+
+# Text/encoding
+hex               = "0.4.3"
+
+# Console - todos os targets excepto WASM
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+vaultseed-console = { path = "Console" }
+
+# Windows
+[target.'cfg(windows)'.dependencies]
+windows-sys       = { version = "0.61.2", features = ["Win32_System_Console"] }
+
+# WASM - uuid e getrandom precisam de uma fonte de aleatoriedade explícita em wasm
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom         = { version = "0.4.2", features = ["wasm_js"] }
+uuid              = { version = "1.23.2",   features = ["v4", "serde", "js"] }
+getrandom_legacy  = { package = "getrandom", version = "0.2", features = ["js"] }
+
+# Extensão de browser - ponto de entrada `#[wasm_bindgen(start)]` e captura de panics Rust na consola do browser. web-sys é usado para ler o tamanho real do <canvas> do popup em vez de um tamanho fixo.
+wasm-bindgen              = { version = "0.2", optional = true }
+console_error_panic_hook  = { version = "0.1", optional = true }
+web-sys                   = { version = "0.3", optional = true, features = ["Window", "Document", "Element", "HtmlCanvasElement", "DomRect"] }
+
+[build-dependencies]
+embed-resource    = "3.0"
+
+[profile.release]
+opt-level     = 3
+lto           = "thin"
+codegen-units = 256
+strip         = true
+panic         = "abort"
+incremental   = true
+
+[profile.release.package.vaultseed-slint]
+opt-level     = 0
+codegen-units = 4
+
+[profile.dev]
+opt-level = 0
+debug     = true
+
+[profile.dev.package."*"]
+opt-level = 3

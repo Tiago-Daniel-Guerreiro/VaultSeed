@@ -1,0 +1,553 @@
+name: "Release"
+
+on:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build_release:
+    name: Build release for ${{ matrix.target }}
+    timeout-minutes: 90
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Windows (tests-only: o release dos .exe e feito pelo pipeline
+          #    Python via cargo-xwin / Build/windows/build_windows.py) 
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: VaultSeed.exe
+            build_mode: native
+            run_target_tests: true
+            tests_only: true
+
+          - os: windows-latest
+            target: i686-pc-windows-msvc
+            artifact_name: VaultSeed.exe
+            build_mode: native
+            run_target_tests: true
+            tests_only: true
+
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            artifact_name: VaultSeed.exe
+            build_mode: native
+            run_target_tests: false
+            tests_only: true
+
+          # Linux 
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact_name: VaultSeed
+            build_mode: native
+            run_target_tests: true
+
+          - os: ubuntu-latest
+            target: i686-unknown-linux-gnu
+            artifact_name: VaultSeed
+            build_mode: cross-linux-i686
+            run_target_tests: false
+
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            artifact_name: VaultSeed
+            build_mode: cross-linux-aarch64
+            run_target_tests: false
+
+          - os: ubuntu-latest
+            target: armv7-unknown-linux-gnueabihf
+            artifact_name: VaultSeed
+            build_mode: cross-linux-armv7
+            run_target_tests: false
+
+          # Android 
+          - os: ubuntu-latest
+            target: aarch64-linux-android
+            artifact_name: VaultSeed
+            build_mode: android
+            run_target_tests: false
+
+          - os: ubuntu-latest
+            target: armv7-linux-androideabi
+            artifact_name: VaultSeed
+            build_mode: android
+            run_target_tests: false
+
+          - os: ubuntu-latest
+            target: x86_64-linux-android
+            artifact_name: VaultSeed
+            build_mode: android
+            run_target_tests: false
+
+          - os: ubuntu-latest
+            target: i686-linux-android
+            artifact_name: VaultSeed
+            build_mode: android
+            run_target_tests: false
+
+          # macOS 
+          # macOS x86_64 desativado - runners macos-13 têm disponibilidade
+          # limitada no plano gratuito do GitHub, causando esperas de 24h+
+          # Para reativar: descomentar as 6 linhas abaixo
+          #- os: macos-13
+          #  target: x86_64-apple-darwin
+          #  artifact_name: VaultSeed
+          #  build_mode: native
+          #  run_target_tests: true
+
+          # macOS tests-only (sem hardware/SDK Apple no pipeline Linux; o
+          # release de macOS, se existir, sai por aqui apenas como teste).
+          - os: macos-14
+            target: aarch64-apple-darwin
+            artifact_name: VaultSeed
+            build_mode: native
+            run_target_tests: true
+            tests_only: true
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Normalize line endings (Windows)
+      if: runner.os == 'Windows'
+      run: git config --global core.autocrlf false
+      shell: bash
+
+    - name: Rust Cache
+      uses: Swatinem/rust-cache@v2
+      with:
+        key: release-${{ matrix.target }}
+
+    - name: Install Rust target
+      run: rustup target add ${{ matrix.target }}
+
+    # Slint: Linux x86_64 nativo 
+    - name: Install Slint system dependencies (Linux x86_64 native)
+      if: matrix.target == 'x86_64-unknown-linux-gnu'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          libxcb-shape0-dev \
+          libxcb-xfixes0-dev \
+          libxkbcommon-dev \
+          libfontconfig1-dev \
+          libegl1-mesa-dev \
+          libgles2-mesa-dev \
+          libwayland-dev \
+          pkg-config
+
+    # Slint: Linux i686 
+    - name: Install Slint system dependencies + i686 toolchain
+      if: matrix.build_mode == 'cross-linux-i686'
+      run: |
+        sudo dpkg --add-architecture i386
+        sudo apt-get update
+        sudo apt-get install -y \
+          gcc-multilib \
+          libc6-dev-i386 \
+          libxcb-shape0-dev:i386 \
+          libxcb-xfixes0-dev:i386 \
+          libxkbcommon-dev:i386 \
+          libfontconfig1-dev:i386 \
+          libegl1-mesa-dev:i386 \
+          libgles2-mesa-dev:i386 \
+          libwayland-dev \
+          pkg-config
+
+    # Slint: Linux aarch64 cross 
+    # Instala libs arm64 para cross-compile correto do fontconfig/wayland
+    - name: Setup Linux ARM64 cross toolchain + host Slint deps
+      if: matrix.build_mode == 'cross-linux-aarch64'
+      run: |
+        sudo dpkg --add-architecture arm64
+        # Restrict existing sources to amd64 - security.ubuntu.com doesn't host arm64
+        # Handle classic single-line format
+        sudo sed -i 's/^deb /deb [arch=amd64] /' /etc/apt/sources.list
+        # Handle DEB822 format (Ubuntu 24.04 runners use ubuntu.sources)
+        if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
+          sudo sed -i '/^Architectures:/d' /etc/apt/sources.list.d/ubuntu.sources
+          sudo sed -i '/^Components:/a Architectures: amd64' /etc/apt/sources.list.d/ubuntu.sources
+        fi
+        # Add arm64 via ports.ubuntu.com (the correct host for arm64)
+        echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble main restricted universe multiverse" | sudo tee /etc/apt/sources.list.d/arm64-ports.list
+        echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/arm64-ports.list
+        echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-security main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/arm64-ports.list
+        sudo apt-get update || true
+        sudo apt-get install -y \
+          gcc-aarch64-linux-gnu \
+          libc6-dev-arm64-cross \
+          libxcb-shape0-dev \
+          libxcb-xfixes0-dev \
+          libxkbcommon-dev \
+          libfontconfig1-dev \
+          libfontconfig1-dev:arm64 \
+          libegl1-mesa-dev \
+          libwayland-dev \
+          libwayland-dev:arm64 \
+          pkg-config
+
+    # Slint: Linux ARMv7 cross 
+    # Instala libs armhf para cross-compile correto do fontconfig/wayland
+    - name: Setup Linux ARMv7 cross toolchain + host Slint deps
+      if: matrix.build_mode == 'cross-linux-armv7'
+      run: |
+        sudo dpkg --add-architecture armhf
+        # Restrict existing sources to amd64 - security.ubuntu.com doesn't host armhf
+        # Handle classic single-line format
+        sudo sed -i 's/^deb /deb [arch=amd64] /' /etc/apt/sources.list
+        # Handle DEB822 format (Ubuntu 24.04 runners use ubuntu.sources)
+        if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
+          sudo sed -i '/^Architectures:/d' /etc/apt/sources.list.d/ubuntu.sources
+          sudo sed -i '/^Components:/a Architectures: amd64' /etc/apt/sources.list.d/ubuntu.sources
+        fi
+        # Add armhf via ports.ubuntu.com (the correct host for armhf)
+        echo "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports noble main restricted universe multiverse" | sudo tee /etc/apt/sources.list.d/armhf-ports.list
+        echo "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports noble-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/armhf-ports.list
+        echo "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports noble-security main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/armhf-ports.list
+        sudo apt-get update
+        sudo apt-get install -y \
+          gcc-arm-linux-gnueabihf \
+          libc6-dev-armhf-cross \
+          libxcb-shape0-dev \
+          libxcb-xfixes0-dev \
+          libxkbcommon-dev \
+          libfontconfig1-dev \
+          libfontconfig1-dev:armhf \
+          libegl1-mesa-dev \
+          libwayland-dev \
+          libwayland-dev:armhf \
+          pkg-config
+
+    # Android 
+    - name: Install cargo-ndk (android)
+      if: matrix.build_mode == 'android'
+      run: cargo install cargo-ndk
+
+    - name: Setup Android NDK (android)
+      if: matrix.build_mode == 'android'
+      uses: nttld/setup-ndk@v1
+      with:
+        ndk-version: r27c
+        local-cache: true
+
+    # ANDROID_JAR via GITHUB_ENV - bypassa pesquisa do build.rs do Slint
+    - name: Install Android SDK platform and set ANDROID_JAR (android)
+      if: matrix.build_mode == 'android'
+      run: |
+        echo "y" | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platforms;android-34"
+
+        ANDROID_JAR_PATH="$ANDROID_HOME/platforms/android-34/android.jar"
+        if [ ! -f "$ANDROID_JAR_PATH" ]; then
+          echo "ERROR: android.jar not found at $ANDROID_JAR_PATH"
+          ls -la "$ANDROID_HOME/platforms/" || echo "platforms dir missing"
+          exit 1
+        fi
+
+        echo "Found: $ANDROID_JAR_PATH"
+        echo "ANDROID_JAR=$ANDROID_JAR_PATH" >> $GITHUB_ENV
+
+    # Testes 
+    - name: Run tests (native target)
+      if: matrix.run_target_tests == true
+      run: cargo test --locked --release --target ${{ matrix.target }} --features desktop -- --test-threads=1
+
+    - name: Run tests (host - cross targets)
+      if: matrix.run_target_tests == false && matrix.build_mode != 'android'
+      run: cargo test --locked --release
+
+    - name: Install system dependencies (android)
+      if: matrix.build_mode == 'android'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libwayland-dev pkg-config
+
+    - name: Run tests (host - android)
+      if: matrix.build_mode == 'android'
+      run: cargo test --locked --release --no-default-features
+
+    # Build 
+    - name: Build Release
+      if: matrix.tests_only != true
+      run: |
+        if [ "${{ matrix.build_mode }}" = "android" ]; then
+          cargo ndk \
+            --platform 34 \
+            --target ${{ matrix.target }} \
+            -- build --locked --release --features android
+
+        elif [ "${{ matrix.build_mode }}" = "cross-linux-i686" ]; then
+          PKG_CONFIG_PATH=/usr/lib/i386-linux-gnu/pkgconfig \
+          PKG_CONFIG_ALLOW_CROSS=1 \
+          CARGO_TARGET_I686_UNKNOWN_LINUX_GNU_LINKER=gcc \
+            cargo build --locked --release --target ${{ matrix.target }} --features desktop
+
+        elif [ "${{ matrix.build_mode }}" = "cross-linux-aarch64" ]; then
+          PKG_CONFIG_ALLOW_CROSS=1 \
+          PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig \
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
+          SLINT_STYLE=fluent \
+            cargo build --locked --release --target ${{ matrix.target }} --features desktop
+
+        elif [ "${{ matrix.build_mode }}" = "cross-linux-armv7" ]; then
+          PKG_CONFIG_ALLOW_CROSS=1 \
+          PKG_CONFIG_PATH=/usr/lib/arm-linux-gnueabihf/pkgconfig \
+          CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc \
+          SLINT_STYLE=fluent \
+            cargo build --locked --release --target ${{ matrix.target }} --features desktop
+
+        else
+          cargo build --locked --release --target ${{ matrix.target }} --features desktop
+        fi
+      shell: bash
+
+    - name: Upload Artifact
+      if: matrix.tests_only != true
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ matrix.target }}-release
+        path: target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
+        if-no-files-found: error
+
+  # ===========================================================================
+  # TARGETS EXTRA - iOS, WASM
+  # ===========================================================================
+  build_extra_targets:
+    name: Compile check ${{ matrix.target }}
+    timeout-minutes: 60
+    continue-on-error: true
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            target: aarch64-apple-ios
+            check_mode: gui
+          - os: macos-14
+            target: x86_64-apple-ios
+            check_mode: gui
+          - os: macos-14
+            target: aarch64-apple-ios-sim
+            check_mode: gui
+          - os: ubuntu-latest
+            target: wasm32-unknown-unknown
+            check_mode: gui
+          - os: ubuntu-latest
+            target: wasm32-wasip1
+            check_mode: no-gui
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Rust Cache
+      uses: Swatinem/rust-cache@v2
+      with:
+        key: release-extra-${{ matrix.target }}
+
+    - name: Install Rust target
+      run: rustup target add ${{ matrix.target }}
+
+    - name: Install host Slint deps (Ubuntu - WASM check)
+      if: runner.os == 'Linux'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          libxcb-shape0-dev \
+          libxcb-xfixes0-dev \
+          libxkbcommon-dev \
+          libfontconfig1-dev \
+          libegl1-mesa-dev \
+          libwayland-dev \
+          pkg-config
+
+    - name: Check target (com GUI - Slint suportado)
+      if: matrix.check_mode == 'gui'
+      run: cargo check --locked --release --target ${{ matrix.target }} --features desktop
+
+    - name: Check target (sem GUI - WASI)
+      if: matrix.check_mode == 'no-gui'
+      run: cargo check --locked --release --target ${{ matrix.target }} --lib --no-default-features
+
+  # ===========================================================================
+  # ANDROID APK
+  # ===========================================================================
+  build_android_apk:
+    name: Build Android APK
+    timeout-minutes: 60
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Rust Cache
+      uses: Swatinem/rust-cache@v2
+      with:
+        key: release-android-apk
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y clang
+
+    - name: Install Rust target
+      run: rustup target add aarch64-linux-android
+
+    - name: Install cargo-ndk
+      run: cargo install cargo-ndk
+
+    - name: Setup Android NDK
+      uses: nttld/setup-ndk@v1
+      with:
+        ndk-version: r27c
+        local-cache: true
+
+    - name: Install Android SDK platform and set ANDROID_JAR
+      run: |
+        echo "y" | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platforms;android-34"
+
+        ANDROID_JAR_PATH="$ANDROID_HOME/platforms/android-34/android.jar"
+        if [ ! -f "$ANDROID_JAR_PATH" ]; then
+          echo "ERROR: android.jar not found at $ANDROID_JAR_PATH"
+          ls -la "$ANDROID_HOME/platforms/" || echo "platforms dir missing"
+          exit 1
+        fi
+
+        echo "Found: $ANDROID_JAR_PATH"
+        echo "ANDROID_JAR=$ANDROID_JAR_PATH" >> $GITHUB_ENV
+
+    - name: Build Rust shared library
+      run: |
+        cargo ndk \
+          --platform 34 \
+          --target aarch64-linux-android \
+          -- build --locked --release --lib --features android
+        mkdir -p android/app/src/main/jniLibs/arm64-v8a
+        cp target/aarch64-linux-android/release/libvaultseed.so \
+           android/app/src/main/jniLibs/arm64-v8a/libvaultseed.so
+
+    - name: Assemble APK
+      run: |
+        cd android
+        sh ./gradlew assembleRelease
+
+    - name: Locate APK
+      run: |
+        echo "=== APKs gerados ==="
+        find . -name "*.apk" | sort
+
+        APK_PATH=$(find . -name "*.apk" | head -n 1)
+
+        if [ -z "$APK_PATH" ]; then
+          echo "ERROR: Nenhum APK encontrado"
+          exit 1
+        fi
+
+        echo "APK encontrado: $APK_PATH"
+        cp "$APK_PATH" android-release.apk
+
+    - name: Upload APK Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: android-apk-release
+        path: android-release.apk
+        if-no-files-found: error
+
+  # ===========================================================================
+  # PUBLISH
+  # ===========================================================================
+  publish:
+    name: Create Release
+    needs: [build_release, build_extra_targets, build_android_apk]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Configure Git
+      run: |
+        git config --global user.name "github-actions[bot]"
+        git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+    - name: Bump Version and Export
+      id: version_handler
+      run: |
+        set -e
+        OLD_VERSION=$(grep '^version' Cargo.toml | head -n1 | cut -d '"' -f2)
+        IFS='.' read -r major minor patch <<< "$OLD_VERSION"
+        NEW_PATCH=$((patch + 1))
+        NEW_VERSION="$major.$minor.$NEW_PATCH"
+        sed -i "s/^version = \"$OLD_VERSION\"/version = \"$NEW_VERSION\"/" Cargo.toml
+        cargo update -p vaultseed --precise "$NEW_VERSION"
+        echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+      shell: bash
+
+    - name: Commit & Push Version Change
+      run: |
+        git add Cargo.toml Cargo.lock
+        git commit -m "chore: bump version to v${{ steps.version_handler.outputs.new_version }} [skip ci]"
+        git push origin main
+
+    - name: Download All Artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: all-artifacts
+
+    - name: Prepare Artifacts for Release
+      run: |
+        mkdir release-files
+
+        # Windows/macOS: tests-only neste workflow - os artefactos sao
+        # produzidos pelo pipeline Python (cargo-xwin / Build/windows/build_windows.py).
+
+        # Linux
+        cp all-artifacts/x86_64-unknown-linux-gnu-release/VaultSeed \
+           release-files/VaultSeed-linux-x64
+        cp all-artifacts/i686-unknown-linux-gnu-release/VaultSeed \
+           release-files/VaultSeed-linux-x86
+        cp all-artifacts/aarch64-unknown-linux-gnu-release/VaultSeed \
+           release-files/VaultSeed-linux-arm64
+        cp all-artifacts/armv7-unknown-linux-gnueabihf-release/VaultSeed \
+           release-files/VaultSeed-linux-armv7
+
+        # Android binaries
+        cp all-artifacts/aarch64-linux-android-release/VaultSeed \
+           release-files/VaultSeed-aarch64-linux-android
+        cp all-artifacts/armv7-linux-androideabi-release/VaultSeed \
+           release-files/VaultSeed-armv7-linux-androideabi
+        cp all-artifacts/x86_64-linux-android-release/VaultSeed \
+           release-files/VaultSeed-x86_64-linux-android
+        cp all-artifacts/i686-linux-android-release/VaultSeed \
+           release-files/VaultSeed-i686-linux-android
+
+        # Android APK
+        cp all-artifacts/android-apk-release/android-release.apk \
+           release-files/VaultSeed-android-arm64-v8a.apk
+
+        # macOS - tests-only (sem artefacto para publicar aqui).
+      shell: bash
+
+    - name: Create or Overwrite Release
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: release-v${{ steps.version_handler.outputs.new_version }}
+        name: Release v${{ steps.version_handler.outputs.new_version }}
+        files: |
+          release-files/VaultSeed-linux-x64
+          release-files/VaultSeed-linux-x86
+          release-files/VaultSeed-linux-arm64
+          release-files/VaultSeed-linux-armv7
+          release-files/VaultSeed-aarch64-linux-android
+          release-files/VaultSeed-armv7-linux-androideabi
+          release-files/VaultSeed-x86_64-linux-android
+          release-files/VaultSeed-i686-linux-android
+          release-files/VaultSeed-android-arm64-v8a.apk
+        draft: false
+        prerelease: false

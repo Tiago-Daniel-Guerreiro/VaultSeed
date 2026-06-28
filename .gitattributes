@@ -1,0 +1,5 @@
+# Garante terminações LF em scripts executados em Linux/Unix, mesmo quando o repositório é editado/clonado em Windows. 
+# Sem isto, o shebang do gradlew # (#!/usr/bin/env sh) fica com CRLF e o build Android falha com "/usr/bin/env: 'sh\r': No such file or directory".
+android/gradlew    text eol=lf
+*.sh               text eol=lf
+*.py               text eol=lf

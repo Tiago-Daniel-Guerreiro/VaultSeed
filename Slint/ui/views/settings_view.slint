@@ -1,0 +1,815 @@
+﻿import { Button, ScrollView, LineEdit } from "std-widgets.slint";
+
+import {
+    Palette, Tokens, Divider, LabeledInput, MessageBanner,
+    SectionTitle, StatusBadge, KeyValueRow, EmptyState,
+    InputDefault, WindowMetrics, SidebarToggle,
+} from "../components/shared_components.slint";
+
+import { SidebarBase, SidebarGroupLabel, SidebarNavItem } from "../components/sidebar_components.slint";
+
+// STRUCTS DE DADOS
+export struct LocalStateItem {
+    // Calibração
+    calibration-min-ms:   string,   // "(não definido)" se None
+    calibration-max-ms:   string,
+
+    // Benchmark Argon2
+    benchmark-m-cost:     string,   // "(mínimo)" se None
+    benchmark-t-cost:     string,
+    benchmark-p-cost:     string,
+
+    // Benchmark exportação
+    benchmark-device-count:   string,
+    benchmark-domains-per-device: string,
+    benchmark-static-per-device:  string,
+    benchmark-k1-len:     string,
+    benchmark-k2-len:     string,
+
+    // Armazenamento da sessão no browser (apenas relevante em wasm)
+    wasm-browser-storage: bool,
+}
+
+// PAINEL: CALIBRAÇÃO - set_expected_calibration_time_prompt
+component CalibrationPanel inherits VerticalLayout {
+    in property <LocalStateItem> state;
+    in property <string>         error: "";
+
+    callback on-set(string /*min_ms*/, string /*max_ms*/);
+    callback on-clear();
+
+    alignment: start;
+    spacing: 20px;
+    padding: WindowMetrics.avail-width < 700px ? 12px : 24px;
+
+    SectionTitle {
+        title:    "Calibração Argon2id";
+        subtitle: "Define o intervalo de tempo alvo para a calibração automática de parâmetros.";
+    }
+
+    // Valores actuais
+    Rectangle {
+        background:    Palette.bg-panel;
+        border-radius: 8px;
+        border-width:  1px;
+        border-color:  Palette.border;
+
+        VerticalLayout {
+            padding: 16px;
+            spacing: 8px;
+
+            Text {
+                text:        "Valores actuais";
+                font-size:   13px;
+                font-weight: 700;
+                color:       Palette.text-muted;
+            }
+
+            Divider {}
+
+            KeyValueRow {
+                label: "Mínimo alvo";
+                value: state.calibration-min-ms != "" ? state.calibration-min-ms + " ms" : "500 ms (padrão)";
+            }
+
+            KeyValueRow {
+                label: "Máximo alvo";
+                value: state.calibration-max-ms != "" ? state.calibration-max-ms + " ms" : "1000 ms (padrão)";
+            }
+        }
+    }
+
+    Divider {}
+
+    // Formulário de definição
+    Rectangle {
+        background:    Palette.bg-panel;
+        border-radius: 8px;
+        border-width:  1px;
+        border-color:  Palette.border;
+
+        VerticalLayout {
+            padding: 16px;
+            spacing: 12px;
+
+            Text {
+                text:        "Definir intervalo";
+                font-size:   13px;
+                font-weight: 700;
+                color:       Palette.text-muted;
+            }
+
+            cal-min := InputDefault {
+                label:         "Mínimo (ms)";
+                default-value: state.calibration-min-ms;
+                hint:          "Tempo mínimo aceitável em milissegundos";
+            }
+
+            cal-max := InputDefault {
+                label:         "Máximo (ms)";
+                default-value: state.calibration-max-ms;
+                hint:          "Diferença mínima de 200ms em relação ao mínimo";
+            }
+
+            MessageBanner {
+                message: root.error;
+                variant: "error";
+            }
+
+            HorizontalLayout {
+                spacing:   8px;
+                alignment: end;
+
+                Button {
+                    text:    "Limpar";
+                    enabled: state.calibration-min-ms != "" || state.calibration-max-ms != "";
+                    clicked => { root.on-clear(); }
+                }
+
+                Button {
+                    text:    "Guardar";
+                    primary: true;
+                    enabled: cal-min.value != "" && cal-max.value != "";
+                    clicked => { root.on-set(cal-min.value, cal-max.value); }
+                }
+            }
+        }
+    }
+}
+
+// PAINEL: ARGON2 DE BENCHMARK - set_benchmark_argon2_prompt
+component BenchmarkArgon2Panel inherits VerticalLayout {
+    in property <LocalStateItem> state;
+    in property <string>         error: "";
+    in property <bool>           calibration-running: false;
+
+    callback on-set(string /*m*/, string /*t*/, string /*p*/);
+    callback on-calibrate();
+
+    property <bool> narrow: WindowMetrics.avail-width < 700px;
+
+    alignment: start;
+    spacing: 20px;
+    padding: root.narrow ? 12px : 24px;
+
+    SectionTitle {
+        title:    "Argon2id do benchmark";
+        subtitle: "Parâmetros usados no benchmark de exportação de senhas.";
+    }
+
+    // Valores actuais
+    Rectangle {
+        background:    Palette.bg-panel;
+        border-radius: 8px;
+        border-width:  1px;
+        border-color:  Palette.border;
+
+        VerticalLayout {
+            padding: 16px;
+            spacing: 8px;
+
+            Text {
+                text:        "Valores actuais";
+                font-size:   13px;
+                font-weight: 700;
+                color:       Palette.text-muted;
+            }
+
+            Divider {}
+
+            KeyValueRow { label: "m_cost"; value: state.benchmark-m-cost; }
+            KeyValueRow { label: "t_cost"; value: state.benchmark-t-cost; }
+            KeyValueRow { label: "p_cost"; value: state.benchmark-p-cost; }
+        }
+    }
+
+    Divider {}
+
+    Rectangle {
+        background:    Palette.bg-panel;
+        border-radius: 8px;
+        border-width:  1px;
+        border-color:  Palette.border;
+
+        VerticalLayout {
+            padding: 16px;
+            spacing: 12px;
+
+            Text {
+                text:        "Definir novos valores";
+                font-size:   13px;
+                font-weight: 700;
+                color:       Palette.text-muted;
+            }
+
+            MessageBanner {
+                message: "Deixe vazio para usar o valor mínimo permitido.";
+                variant: "info";
+            }
+
+            bm-m := InputDefault {
+                label:         "m_cost (KiB)";
+                default-value: state.benchmark-m-cost;
+                hint:          "Mínimo permitido";
+            }
+
+            bm-t := InputDefault {
+                label:         "t_cost";
+                default-value: state.benchmark-t-cost;
+                hint:          "Mínimo permitido";
+            }
+
+            bm-p := InputDefault {
+                label:         "p_cost";
+                default-value: state.benchmark-p-cost;
+                hint:          "Mínimo permitido";
+            }
+
+            MessageBanner {
+                message: root.error;
+                variant: "error";
+            }
+
+            if !root.narrow : HorizontalLayout {
+                alignment: end;
+                spacing:   8px;
+
+                Button {
+                    text:    root.calibration-running ? "A calibrar..." : "Calibrar automaticamente";
+                    enabled: !root.calibration-running;
+                    clicked => { root.on-calibrate(); }
+                }
+
+                Button {
+                    text:    "Guardar";
+                    primary: true;
+                    clicked => {
+                        root.on-set(bm-m.value, bm-t.value, bm-p.value);
+                    }
+                }
+            }
+
+            if root.narrow : VerticalLayout {
+                spacing: 8px;
+
+                Button {
+                    text:    root.calibration-running ? "A calibrar..." : "Calibrar automaticamente";
+                    enabled: !root.calibration-running;
+                    width:   100%;
+                    clicked => { root.on-calibrate(); }
+                }
+
+                Button {
+                    text:    "Guardar";
+                    primary: true;
+                    width:   100%;
+                    clicked => {
+                        root.on-set(bm-m.value, bm-t.value, bm-p.value);
+                    }
+                }
+            }
+        }
+    }
+}
+
+// PAINEL: EXPORTAÇÃO DE BENCHMARK - set_benchmark_export_prompt
+component BenchmarkExportPanel inherits VerticalLayout {
+    in property <LocalStateItem> state;
+    in property <string>         error: "";
+
+    callback on-set(
+        string, /*device_count*/
+        string, /*domains_per_device*/
+        string, /*static_per_device*/
+        string, /*k1_len*/
+        string  /*k2_len*/
+    );
+
+    alignment: start;
+    spacing: 20px;
+    padding: WindowMetrics.avail-width < 700px ? 12px : 24px;
+
+    SectionTitle {
+        title:    "Exportação do benchmark";
+        subtitle: "Define os parâmetros da simulação de exportação de senhas.";
+    }
+
+    // Valores actuais
+    Rectangle {
+        background:    Palette.bg-panel;
+        border-radius: 8px;
+        border-width:  1px;
+        border-color:  Palette.border;
+
+        VerticalLayout {
+            padding: 16px;
+            spacing: 8px;
+
+            Text {
+                text:        "Valores actuais";
+                font-size:   13px;
+                font-weight: 700;
+                color:       Palette.text-muted;
+            }
+
+            Divider {}
+
+            KeyValueRow { label: "Dispositivos";             value: state.benchmark-device-count; }
+            KeyValueRow { label: "Domínios / dispositivo";   value: state.benchmark-domains-per-device; }
+            KeyValueRow { label: "Estáticas / dispositivo";  value: state.benchmark-static-per-device; }
+            KeyValueRow { label: "Tamanho K1";               value: state.benchmark-k1-len; }
+            KeyValueRow { label: "Tamanho K2";               value: state.benchmark-k2-len; }
+        }
+    }
+
+    Divider {}
+
+    Rectangle {
+        background:    Palette.bg-panel;
+        border-radius: 8px;
+        border-width:  1px;
+        border-color:  Palette.border;
+
+        VerticalLayout {
+            padding: 16px;
+            spacing: 12px;
+
+            Text {
+                text:        "Definir novos valores";
+                font-size:   13px;
+                font-weight: 700;
+                color:       Palette.text-muted;
+            }
+
+            MessageBanner {
+                message: "Deixe vazio para manter o valor padrão.";
+                variant: "info";
+            }
+
+            ex-devs := InputDefault {
+                label:         "Dispositivos";
+                default-value: state.benchmark-device-count;
+            }
+
+            ex-doms := InputDefault {
+                label:         "Domínios / disp.";
+                default-value: state.benchmark-domains-per-device;
+            }
+
+            ex-stat := InputDefault {
+                label:         "Estáticas / disp.";
+                default-value: state.benchmark-static-per-device;
+            }
+
+            ex-k1 := InputDefault {
+                label:         "Tamanho K1";
+                default-value: state.benchmark-k1-len;
+            }
+
+            ex-k2 := InputDefault {
+                label:         "Tamanho K2";
+                default-value: state.benchmark-k2-len;
+            }
+
+            MessageBanner {
+                message: root.error;
+                variant: "error";
+            }
+
+            HorizontalLayout {
+                alignment: end;
+
+                Button {
+                    text:    "Guardar";
+                    primary: true;
+                    clicked => {
+                        root.on-set(
+                            ex-devs.value,
+                            ex-doms.value,
+                            ex-stat.value,
+                            ex-k1.value,
+                            ex-k2.value,
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+// PAINEL: DADOS LOCAIS - apagar local state
+component LocalDataPanel inherits VerticalLayout {
+    in property <LocalStateItem> state;
+    in property <string> error: "";
+
+    callback on-delete-local();
+
+    property <bool> narrow:       WindowMetrics.avail-width < 700px;
+    property <bool> very-narrow:  WindowMetrics.avail-width < 400px;
+
+    alignment: start;
+    spacing: 20px;
+    padding: root.narrow ? 12px : 24px;
+
+    SectionTitle {
+        title:    "Dados locais";
+        subtitle: "Gere o ficheiro de estado local da aplicação.";
+    }
+
+    Rectangle {
+        background:    Palette.bg-panel;
+        border-radius: 8px;
+        border-width:  1px;
+        border-color:  Palette.border;
+
+        VerticalLayout {
+            padding: 16px;
+            spacing: 8px;
+
+            Text {
+                text:        "O que está guardado localmente";
+                font-size:   13px;
+                font-weight: 700;
+                color:       Palette.text-muted;
+            }
+
+            Divider {}
+
+            KeyValueRow {
+                label: "Calibração (mín -> máx)";
+                value: state.calibration-min-ms != "" ? state.calibration-min-ms + " ms  ->  " + state.calibration-max-ms + " ms" : "(não definido)";
+            }
+            KeyValueRow {
+                label: "Argon2id (benchmark)";
+                value: "m=" + state.benchmark-m-cost + "  t=" + state.benchmark-t-cost + "  p=" + state.benchmark-p-cost;
+            }
+            KeyValueRow {
+                label: "Exportação (disp / dom / est)";
+                value: state.benchmark-device-count + " / " + state.benchmark-domains-per-device + " / " + state.benchmark-static-per-device;
+            }
+            KeyValueRow {
+                label: "Comprimentos K1 / K2";
+                value: state.benchmark-k1-len + " / " + state.benchmark-k2-len;
+            }
+        }
+    }
+
+    MessageBanner {
+        message: root.error;
+        variant: "error";
+    }
+
+    Rectangle {
+        background:    #2e1a1a;
+        border-radius: 8px;
+        border-width:  1px;
+        border-color:  Palette.danger;
+
+        VerticalLayout {
+        if !root.very-narrow : HorizontalLayout {
+            padding:   16px;
+            spacing:   12px;
+            alignment: start;
+
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: 2px;
+
+                Text {
+                    text:        "Apagar dados locais";
+                    font-size:   13px;
+                    font-weight: 700;
+                    color:       Palette.danger;
+                }
+
+                Text {
+                    text:      "Remove o ficheiro de estado local. As sessões e senhas NÃO são afectadas.";
+                    font-size: 11px;
+                    color:     Palette.text-muted;
+                    wrap:      word-wrap;
+                }
+            }
+
+            Button {
+                text:    "Apagar e sair";
+                clicked => { root.on-delete-local(); }
+            }
+        }
+
+        if root.very-narrow : VerticalLayout {
+            padding: 16px;
+            spacing: 10px;
+
+            Text {
+                text:        "Apagar dados locais";
+                font-size:   13px;
+                font-weight: 700;
+                color:       Palette.danger;
+            }
+
+            Text {
+                text:      "Remove o ficheiro de estado local. As sessões e senhas NÃO são afectadas.";
+                font-size: 11px;
+                color:     Palette.text-muted;
+                wrap:      word-wrap;
+            }
+
+            Button {
+                text:    "Apagar e sair";
+                width:   100%;
+                clicked => { root.on-delete-local(); }
+            }
+        }
+        }
+    }
+}
+
+component BrowserStoragePanel inherits VerticalLayout {
+    in property <bool>   browser-storage: false;
+    in property <string> error: "";
+
+    callback on-toggle(bool);
+    callback on-pick-replace-session();
+
+    alignment: start;
+    spacing: 20px;
+    padding: WindowMetrics.avail-width < 700px ? 12px : 24px;
+
+    SectionTitle {
+        title:    "Sessão no browser";
+        subtitle: "Este ambiente não tem acesso a um sistema de ficheiros real - a sessão fica guardada dentro do próprio browser.";
+    }
+
+    Rectangle {
+        height:        56px;
+        background:    Palette.bg-panel;
+        border-radius: 6px;
+        border-width:  1px;
+        border-color:  root.browser-storage ? Palette.accent : Palette.border;
+        animate border-color { duration: 100ms; }
+
+        toggle-ta := TouchArea {
+            clicked => { root.on-toggle(!root.browser-storage); }
+        }
+
+        HorizontalLayout {
+            padding-left:  14px;
+            padding-right: 14px;
+            spacing:       12px;
+            alignment:     start;
+
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: 2px;
+                alignment: center;
+
+                Text {
+                    text:        "Usar armazenamento do browser";
+                    font-size:   13px;
+                    font-weight: 700;
+                    color:       Palette.text-primary;
+                }
+
+                Text {
+                    text:      "Sem seletor de caminho - a sessão fica sempre na mesma chave dentro do browser.";
+                    font-size: 11px;
+                    color:     Palette.text-muted;
+                    wrap:      word-wrap;
+                }
+            }
+
+            VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    width:         40px;
+                    height:        22px;
+                    border-radius: 11px;
+                    background:    root.browser-storage ? Palette.accent : Palette.border;
+                    animate background { duration: 120ms; }
+
+                    Rectangle {
+                        x: root.browser-storage ? parent.width - self.width - 2px : 2px;
+                        y: 2px;
+                        width:         18px;
+                        height:        18px;
+                        border-radius: 9px;
+                        background:    Palette.bg-base;
+                        animate x { duration: 120ms; easing: ease-in-out; }
+                    }
+                }
+            }
+        }
+    }
+
+    if root.browser-storage : Rectangle {
+        background:    Palette.bg-panel;
+        border-radius: 8px;
+        border-width:  1px;
+        border-color:  Palette.border;
+
+        VerticalLayout {
+            padding: 16px;
+            spacing: 10px;
+
+            Text {
+                text:        "Substituir pela sessão de um ficheiro";
+                font-size:   13px;
+                font-weight: 700;
+                color:       Palette.text-muted;
+            }
+
+            Text {
+                text:      "Carrega um ficheiro de sessão (.vaultseed) e substitui o que está guardado no browser por ele.";
+                font-size: 11px;
+                color:     Palette.text-muted;
+                wrap:      word-wrap;
+            }
+
+            Button {
+                text:    "Selecionar ficheiro existente...";
+                clicked => { root.on-pick-replace-session(); }
+            }
+        }
+    }
+
+    MessageBanner {
+        message: root.error;
+        variant: "error";
+    }
+}
+
+export component SettingsView inherits HorizontalLayout {
+
+    // Dados vindos do Rust 
+    in property <LocalStateItem> state;
+
+    // Erros por painel
+    in property <string> error-calibration:  "";
+    in property <string> error-argon2:       "";
+    in property <string> error-export:       "";
+    in property <string> error-local:        "";
+    in property <string> error-browser-storage: "";
+
+    // Apenas mostra o painel "Sessão no browser" na build wasm
+    in property <bool> is-wasm: false;
+
+    // Painel activo interno 
+    in-out property <int> active-panel: 0;
+
+    in property <length> avail-width: 1000px;
+    in property <bool>   calibration-running: false;
+
+    // Callbacks -> Rust
+    callback on-set-calibration(string /*min_ms*/, string /*max_ms*/);
+    callback on-clear-calibration();
+    callback on-set-benchmark-argon2(string /*m*/, string /*t*/, string /*p*/);
+    callback on-calibrate-argon2();
+    callback on-set-benchmark-export(
+        string, /*device_count*/
+        string, /*domains_per_device*/
+        string, /*static_per_device*/
+        string, /*k1_len*/
+        string  /*k2_len*/
+    );
+    callback on-delete-local();
+    callback on-set-wasm-browser-storage(bool);
+    callback on-pick-replace-session();
+
+    // Navega para o benchmark - o app_window trata da troca de vista
+    callback on-open-benchmark();
+
+    spacing: 0px;
+
+    settings-sidebar := SidebarBase {
+        avail-width: root.avail-width;
+        title:       "Configurações";
+
+        if !settings-sidebar.narrow || !settings-sidebar.minimized : VerticalLayout {
+            spacing: 2px;
+
+            if !settings-sidebar.minimized : SidebarGroupLabel { label: "CALIBRAÇÃO"; }
+            SidebarNavItem {
+                label:    "Calibração Argon2id";
+                sublabel: state.calibration-min-ms != "" ? state.calibration-min-ms + " ms  ->  " + state.calibration-max-ms + " ms" : "usando valores padrão";
+                active:   root.active-panel == 0;
+                compact:  settings-sidebar.minimized && !settings-sidebar.narrow;
+                clicked => { root.active-panel = 0; if settings-sidebar.narrow { settings-sidebar.minimized = true; } }
+            }
+
+            if !settings-sidebar.minimized : SidebarGroupLabel { label: "BENCHMARK"; }
+            SidebarNavItem {
+                label:    "Argon2id do benchmark";
+                sublabel: "m=" + state.benchmark-m-cost + " t=" + state.benchmark-t-cost + " p=" + state.benchmark-p-cost;
+                active:   root.active-panel == 1;
+                compact:  settings-sidebar.minimized && !settings-sidebar.narrow;
+                clicked => { root.active-panel = 1; if settings-sidebar.narrow { settings-sidebar.minimized = true; } }
+            }
+            SidebarNavItem {
+                label:    "Exportação benchmark";
+                sublabel: state.benchmark-device-count + " disp. · " + state.benchmark-domains-per-device + " dom. · " + state.benchmark-static-per-device + " est.";
+                active:   root.active-panel == 2;
+                compact:  settings-sidebar.minimized && !settings-sidebar.narrow;
+                clicked => { root.active-panel = 2; if settings-sidebar.narrow { settings-sidebar.minimized = true; } }
+            }
+
+            if !settings-sidebar.minimized : SidebarGroupLabel { label: "SISTEMA"; }
+            SidebarNavItem {
+                label:   "Dados locais";
+                active:  root.active-panel == 3;
+                compact: settings-sidebar.minimized && !settings-sidebar.narrow;
+                clicked => { root.active-panel = 3; if settings-sidebar.narrow { settings-sidebar.minimized = true; } }
+            }
+            if root.is-wasm : SidebarNavItem {
+                label:    "Sessão no browser";
+                sublabel: state.wasm-browser-storage ? "ativo" : "desativado";
+                active:   root.active-panel == 4;
+                compact:  settings-sidebar.minimized && !settings-sidebar.narrow;
+                clicked => { root.active-panel = 4; if settings-sidebar.narrow { settings-sidebar.minimized = true; } }
+            }
+        }
+
+        // Espaçador empurra o botão "Ir para Benchmark" para o fundo
+        Rectangle { vertical-stretch: 100; }
+
+        if !settings-sidebar.minimized : Rectangle {
+            height:        56px;
+            border-radius: 8px;
+            border-width:  1px;
+            border-color:  Palette.accent;
+            background:    Palette.bg-active;
+
+            bm-ta := TouchArea { clicked => { root.on-open-benchmark(); } }
+
+            VerticalLayout {
+                padding:   10px;
+                spacing:   2px;
+                alignment: center;
+
+                Text {
+                    text:        "Ir para Benchmark";
+                    font-size:   13px;
+                    font-weight: 700;
+                    color:       bm-ta.has-hover ? Palette.text-heading : Palette.accent;
+                    horizontal-alignment: center;
+                    animate color { duration: 100ms; }
+                }
+
+                Text {
+                    text:                 "Calibração · Exportação";
+                    font-size:            10px;
+                    color:                Palette.text-muted;
+                    horizontal-alignment: center;
+                }
+            }
+        }
+    }
+
+    // ÁREA DE CONTEÚDO - os painéis ficam dentro de um VerticalLayout para  que o ScrollView consiga medir a altura total e activar o scroll.
+    ScrollView {
+        horizontal-stretch: 1;
+        vertical-stretch:   1;
+
+        VerticalLayout {
+            alignment: start;
+
+            if active-panel == 0 : CalibrationPanel {
+                state: root.state;
+                error: root.error-calibration;
+
+                on-set(min, max) => { root.on-set-calibration(min, max); }
+                on-clear         => { root.on-clear-calibration(); }
+            }
+
+            if active-panel == 1 : BenchmarkArgon2Panel {
+                state:               root.state;
+                error:               root.error-argon2;
+                calibration-running: root.calibration-running;
+
+                on-set(m, t, p) => { root.on-set-benchmark-argon2(m, t, p); }
+                on-calibrate    => { root.on-calibrate-argon2(); }
+            }
+
+            if active-panel == 2 : BenchmarkExportPanel {
+                state: root.state;
+                error: root.error-export;
+
+                on-set(devs, doms, stat, k1, k2) => {
+                    root.on-set-benchmark-export(devs, doms, stat, k1, k2);
+                }
+            }
+
+            if active-panel == 3 : LocalDataPanel {
+                state:            root.state;
+                error:            root.error-local;
+                on-delete-local   => { root.on-delete-local(); }
+            }
+
+            if active-panel == 4 && root.is-wasm : BrowserStoragePanel {
+                browser-storage: root.state.wasm-browser-storage;
+                error:           root.error-browser-storage;
+                on-toggle(v)            => { root.on-set-wasm-browser-storage(v); }
+                on-pick-replace-session => { root.on-pick-replace-session(); }
+            }
+        }
+    }
+}

@@ -1,0 +1,202 @@
+name: "Testes (Quirk)"
+
+on:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_TEST_THREADS: 1
+  TZ: UTC
+  LC_ALL: C.UTF-8
+
+jobs:
+  # ===========================================================================
+  # LINUX - check de todos os targets do perfil "reduced" + clippy + testes
+  # (target nativo: x86_64-unknown-linux-gnu)
+  # ===========================================================================
+  linux:
+    name: Tests (Linux, reduced profile)
+    timeout-minutes: 60
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Rust Cache
+      uses: Swatinem/rust-cache@v2
+      with:
+        key: testes-quirk-linux
+
+    - name: Install Rust targets
+      run: |
+        rustup target add \
+          x86_64-unknown-linux-gnu aarch64-linux-android \
+          x86_64-pc-windows-msvc wasm32-unknown-unknown
+
+    # Linux x86_64 (nativo)
+    - name: Install Slint system dependencies (Linux x86_64)
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          libxcb-shape0-dev \
+          libxcb-xfixes0-dev \
+          libxkbcommon-dev \
+          libfontconfig1-dev \
+          libegl1-mesa-dev \
+          libgles2-mesa-dev \
+          libwayland-dev \
+          pkg-config
+
+    # WASM
+    - name: Install host Slint deps (WASM)
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          libxcb-shape0-dev \
+          libxcb-xfixes0-dev \
+          libxkbcommon-dev \
+          libfontconfig1-dev \
+          libegl1-mesa-dev \
+          libwayland-dev \
+          pkg-config
+
+    - name: Install wasm-pack
+      run: cargo install wasm-pack
+
+    # Android
+    - name: Install cargo-ndk
+      run: cargo install cargo-ndk
+
+    - name: Setup Android NDK
+      uses: nttld/setup-ndk@v1
+      with:
+        local-cache: true
+        ndk-version: r27c
+
+    - name: Install Android SDK platform and set ANDROID_JAR
+      run: |
+        echo "y" | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platforms;android-34"
+
+        ANDROID_JAR_PATH="$ANDROID_HOME/platforms/android-34/android.jar"
+        if [ ! -f "$ANDROID_JAR_PATH" ]; then
+          echo "ERROR: android.jar not found at $ANDROID_JAR_PATH"
+          ls -la "$ANDROID_HOME/platforms/" || echo "platforms dir missing"
+          exit 1
+        fi
+
+        echo "Found: $ANDROID_JAR_PATH"
+        echo "ANDROID_JAR=$ANDROID_JAR_PATH" >> $GITHUB_ENV
+
+    # Windows MSVC cross (cargo-xwin)
+    - name: Install cargo-xwin
+      run: cargo install cargo-xwin
+
+    - name: Prefetch Windows SDK (cargo-xwin)
+      run: |
+        export XWIN_ACCEPT_LICENSE=1 XWIN_ARCH=x86,x86_64,aarch64
+        D=$(mktemp -d) && cd "$D" && cargo new --bin xwin_probe -q && cd xwin_probe
+        cargo xwin build --release --target x86_64-pc-windows-msvc
+
+    # =========================================================================
+    # Passo 1: check de todos os targets do perfil "reduced" (fail-fast)
+    # =========================================================================
+
+    - name: Check x86_64-unknown-linux-gnu
+      run: cargo check --release --target x86_64-unknown-linux-gnu --features desktop
+
+    - name: Check aarch64-linux-android
+      run: cargo ndk --platform 34 --target aarch64-linux-android -- check --release --features android
+
+    - name: Check x86_64-pc-windows-msvc
+      run: cargo xwin check --release --target x86_64-pc-windows-msvc --features desktop
+
+    - name: Check wasm32-extension
+      run: cargo check --release --target wasm32-unknown-unknown --no-default-features --features extension
+
+    # =========================================================================
+    # Passo 2: clippy + Passo 3: testes unitários (target nativo)
+    # =========================================================================
+
+    - name: Clippy (x86_64-unknown-linux-gnu)
+      run: cargo clippy --release --target x86_64-unknown-linux-gnu --workspace --features desktop -- -D warnings
+
+    - name: Unit tests (x86_64-unknown-linux-gnu)
+      run: cargo test --release --target x86_64-unknown-linux-gnu -p vaultseed-core --lib
+
+  # ===========================================================================
+  # WINDOWS - check dos targets buildable nativamente em Windows do perfil
+  # "reduced" (build nativo MSVC, sem cargo xwin) + clippy + testes
+  # (target nativo: x86_64-pc-windows-msvc)
+  # ===========================================================================
+  windows:
+    name: Tests (Windows, reduced profile)
+    timeout-minutes: 60
+    runs-on: windows-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Normalize line endings (Windows)
+      run: git config --global core.autocrlf false
+      shell: bash
+
+    - name: Rust Cache
+      uses: Swatinem/rust-cache@v2
+      with:
+        key: testes-quirk-windows
+
+    - name: Install Rust targets
+      run: |
+        rustup target add x86_64-pc-windows-msvc aarch64-linux-android wasm32-unknown-unknown
+
+    - name: Install wasm-pack
+      run: cargo install wasm-pack
+
+    # Android
+    - name: Install cargo-ndk
+      run: cargo install cargo-ndk
+
+    - name: Setup Android NDK
+      uses: nttld/setup-ndk@v1
+      with:
+        local-cache: true
+        ndk-version: r27c
+
+    - name: Install Android SDK platform and set ANDROID_JAR
+      shell: bash
+      run: |
+        echo "y" | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-34"
+
+        ANDROID_JAR_PATH="$ANDROID_HOME/platforms/android-34/android.jar"
+        if [ ! -f "$ANDROID_JAR_PATH" ]; then
+          echo "ERROR: android.jar not found at $ANDROID_JAR_PATH"
+          ls -la "$ANDROID_HOME/platforms/" || echo "platforms dir missing"
+          exit 1
+        fi
+
+        echo "Found: $ANDROID_JAR_PATH"
+        echo "ANDROID_JAR=$ANDROID_JAR_PATH" >> "$GITHUB_ENV"
+
+    # =========================================================================
+    # Passo 1: check dos targets buildable nativamente em Windows (fail-fast)
+    # =========================================================================
+
+    - name: Check x86_64-pc-windows-msvc
+      run: cargo check --release --target x86_64-pc-windows-msvc --features desktop
+
+    - name: Check aarch64-linux-android
+      run: cargo ndk --platform 34 --target aarch64-linux-android -- check --release --features android
+
+    - name: Check wasm32-extension
+      run: cargo check --release --target wasm32-unknown-unknown --no-default-features --features extension
+
+    # =========================================================================
+    # Passo 2: clippy + Passo 3: testes unitários (target nativo)
+    # =========================================================================
+
+    - name: Clippy (x86_64-pc-windows-msvc)
+      run: cargo clippy --release --target x86_64-pc-windows-msvc --workspace --features desktop -- -D warnings
+
+    - name: Unit tests (x86_64-pc-windows-msvc)
+      run: cargo test --release --target x86_64-pc-windows-msvc -p vaultseed-core --lib

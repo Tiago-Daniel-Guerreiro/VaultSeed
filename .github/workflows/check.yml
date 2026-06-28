@@ -1,0 +1,221 @@
+name: "Check"
+
+on:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  check:
+    name: Check all targets (full profile)
+    timeout-minutes: 90
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Rust Cache
+      uses: Swatinem/rust-cache@v2
+      with:
+        key: check-full
+
+    - name: Install Rust targets
+      run: |
+        rustup target add \
+          x86_64-unknown-linux-gnu i686-unknown-linux-gnu \
+          aarch64-unknown-linux-gnu armv7-unknown-linux-gnueabihf \
+          aarch64-linux-android armv7-linux-androideabi \
+          x86_64-linux-android i686-linux-android \
+          wasm32-unknown-unknown wasm32-wasip1 \
+          x86_64-pc-windows-msvc i686-pc-windows-msvc aarch64-pc-windows-msvc
+
+    # Linux x86_64 (nativo)
+    - name: Install Slint system dependencies (Linux x86_64)
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          libxcb-shape0-dev \
+          libxcb-xfixes0-dev \
+          libxkbcommon-dev \
+          libfontconfig1-dev \
+          libegl1-mesa-dev \
+          libgles2-mesa-dev \
+          libwayland-dev \
+          pkg-config
+
+    # Linux i686
+    - name: Install Slint system dependencies + i686 toolchain (Linux i686)
+      run: |
+        sudo dpkg --add-architecture i386
+        sudo apt-get update
+        sudo apt-get install -y \
+          gcc-multilib \
+          libc6-dev-i386 \
+          libxcb-shape0-dev:i386 \
+          libxcb-xfixes0-dev:i386 \
+          libxkbcommon-dev:i386 \
+          libfontconfig1-dev:i386 \
+          libegl1-mesa-dev:i386 \
+          libgles2-mesa-dev:i386 \
+          libwayland-dev \
+          pkg-config
+
+    # Linux aarch64 cross
+    - name: Setup Linux ARM64 cross toolchain + host Slint deps
+      run: |
+        sudo dpkg --add-architecture arm64
+        # Restrict existing sources to amd64 - security.ubuntu.com doesn't host arm64
+        # Handle classic single-line format
+        sudo sed -i 's/^deb /deb [arch=amd64] /' /etc/apt/sources.list
+        # Handle DEB822 format (Ubuntu 24.04 runners use ubuntu.sources)
+        if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
+          sudo sed -i '/^Architectures:/d' /etc/apt/sources.list.d/ubuntu.sources
+          sudo sed -i '/^Components:/a Architectures: amd64' /etc/apt/sources.list.d/ubuntu.sources
+        fi
+        # Add arm64 via ports.ubuntu.com (the correct host for arm64)
+        echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble main restricted universe multiverse" | sudo tee /etc/apt/sources.list.d/arm64-ports.list
+        echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/arm64-ports.list
+        echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-security main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/arm64-ports.list
+        sudo apt-get update || true
+        sudo apt-get install -y \
+          gcc-aarch64-linux-gnu \
+          libc6-dev-arm64-cross \
+          libxcb-shape0-dev \
+          libxcb-xfixes0-dev \
+          libxkbcommon-dev \
+          libfontconfig1-dev \
+          libfontconfig1-dev:arm64 \
+          libegl1-mesa-dev \
+          libwayland-dev \
+          libwayland-dev:arm64 \
+          pkg-config
+
+    # Linux ARMv7 cross
+    - name: Setup Linux ARMv7 cross toolchain + host Slint deps
+      run: |
+        sudo dpkg --add-architecture armhf
+        # Restrict existing sources to amd64 - security.ubuntu.com doesn't host armhf
+        # Handle classic single-line format
+        sudo sed -i 's/^deb /deb [arch=amd64] /' /etc/apt/sources.list
+        # Handle DEB822 format (Ubuntu 24.04 runners use ubuntu.sources)
+        if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
+          sudo sed -i '/^Architectures:/d' /etc/apt/sources.list.d/ubuntu.sources
+          sudo sed -i '/^Components:/a Architectures: amd64' /etc/apt/sources.list.d/ubuntu.sources
+        fi
+        # Add armhf via ports.ubuntu.com (the correct host for armhf)
+        echo "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports noble main restricted universe multiverse" | sudo tee /etc/apt/sources.list.d/armhf-ports.list
+        echo "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports noble-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/armhf-ports.list
+        echo "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports noble-security main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/armhf-ports.list
+        sudo apt-get update || true
+        sudo apt-get install -y \
+          gcc-arm-linux-gnueabihf \
+          libc6-dev-armhf-cross \
+          libxcb-shape0-dev \
+          libxcb-xfixes0-dev \
+          libxkbcommon-dev \
+          libfontconfig1-dev \
+          libfontconfig1-dev:armhf \
+          libegl1-mesa-dev \
+          libwayland-dev \
+          libwayland-dev:armhf \
+          pkg-config
+
+    # WASM
+    - name: Install host Slint deps (WASM)
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          libxcb-shape0-dev \
+          libxcb-xfixes0-dev \
+          libxkbcommon-dev \
+          libfontconfig1-dev \
+          libegl1-mesa-dev \
+          libwayland-dev \
+          pkg-config
+
+    - name: Install wasm-pack
+      run: cargo install wasm-pack
+
+    # Android
+    - name: Install cargo-ndk
+      run: cargo install cargo-ndk
+
+    - name: Setup Android NDK
+      uses: nttld/setup-ndk@v1
+      with:
+        local-cache: true
+        ndk-version: r27c
+
+    - name: Install Android SDK platform and set ANDROID_JAR
+      run: |
+        echo "y" | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platforms;android-34"
+
+        ANDROID_JAR_PATH="$ANDROID_HOME/platforms/android-34/android.jar"
+        if [ ! -f "$ANDROID_JAR_PATH" ]; then
+          echo "ERROR: android.jar not found at $ANDROID_JAR_PATH"
+          ls -la "$ANDROID_HOME/platforms/" || echo "platforms dir missing"
+          exit 1
+        fi
+
+        echo "Found: $ANDROID_JAR_PATH"
+        echo "ANDROID_JAR=$ANDROID_JAR_PATH" >> $GITHUB_ENV
+
+    # Windows MSVC cross (cargo-xwin)
+    - name: Install cargo-xwin
+      run: cargo install cargo-xwin
+
+    - name: Prefetch Windows SDK (cargo-xwin)
+      run: |
+        export XWIN_ACCEPT_LICENSE=1 XWIN_ARCH=x86,x86_64,aarch64
+        D=$(mktemp -d) && cd "$D" && cargo new --bin xwin_probe -q && cd xwin_probe
+        cargo xwin build --release --target x86_64-pc-windows-msvc
+        cargo xwin build --release --target i686-pc-windows-msvc
+        cargo xwin build --release --target aarch64-pc-windows-msvc
+
+    # =========================================================================
+    # CHECK - todos os targets do perfil "full" (fail-fast)
+    # =========================================================================
+
+    - name: Check x86_64-unknown-linux-gnu
+      run: cargo check --release --target x86_64-unknown-linux-gnu --features desktop
+
+    - name: Check i686-unknown-linux-gnu
+      run: cargo check --release --target i686-unknown-linux-gnu --features desktop
+
+    - name: Check aarch64-unknown-linux-gnu
+      run: cargo check --release --target aarch64-unknown-linux-gnu --features desktop
+
+    - name: Check armv7-unknown-linux-gnueabihf
+      run: cargo check --release --target armv7-unknown-linux-gnueabihf --features desktop
+
+    - name: Check aarch64-linux-android
+      run: cargo ndk --platform 34 --target aarch64-linux-android -- check --release --features android
+
+    - name: Check armv7-linux-androideabi
+      run: cargo ndk --platform 34 --target armv7-linux-androideabi -- check --release --features android
+
+    - name: Check x86_64-linux-android
+      run: cargo ndk --platform 34 --target x86_64-linux-android -- check --release --features android
+
+    - name: Check i686-linux-android
+      run: cargo ndk --platform 34 --target i686-linux-android -- check --release --features android
+
+    - name: Check wasm32-unknown-unknown
+      run: cargo check --release --target wasm32-unknown-unknown --lib --no-default-features
+
+    - name: Check wasm32-wasip1
+      run: cargo check --release --target wasm32-wasip1 --lib --no-default-features
+
+    - name: Check wasm32-extension
+      run: cargo check --release --target wasm32-unknown-unknown --no-default-features --features extension
+
+    - name: Check x86_64-pc-windows-msvc
+      run: cargo xwin check --release --target x86_64-pc-windows-msvc --features desktop
+
+    - name: Check i686-pc-windows-msvc
+      run: cargo xwin check --release --target i686-pc-windows-msvc --features desktop
+
+    - name: Check aarch64-pc-windows-msvc
+      run: cargo xwin check --release --target aarch64-pc-windows-msvc --features desktop

@@ -1,0 +1,8 @@
+// Arquivo de entrada para o compilador Slint.
+// Importa o componente principal e expõe um root component para a aplicação.
+
+import { AppWindow as BaseAppWindow } from "app_window.slint";
+
+// Exporta o componente com o mesmo nome esperado pelo Rust
+export component AppWindow inherits BaseAppWindow {
+}

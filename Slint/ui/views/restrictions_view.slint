@@ -1,0 +1,2213 @@
+import { Button, LineEdit, ScrollView } from "std-widgets.slint";
+
+import {
+    Palette, Tokens, Divider, LabeledInput, MessageBanner,
+    Card, SectionTitle, StatusBadge, KeyValueRow,
+    EmptyState, ListHeader, WindowMetrics, IconLock,
+    FullscreenModalBase, IconRefresh, IconCheck, IconClose, IconTrash, IconChevron,
+    TextLine, MixedFontText, ClipboardActions,
+} from "../components/shared_components.slint";
+
+import { SidebarBase } from "../components/sidebar_components.slint";
+
+// STRUCTS DE DADOS
+export struct RestrictionItem {
+    uuid:               string,
+    device-uuid:        string,
+    name:               string,
+    default-mask:       int,
+    custom-mask:        int,
+    bytes-to-derive:    int,
+    format-visual:      string,
+    sequence-len:       int,
+    char-list-count:    int,
+    domain-count:       int,
+    total-entropy-bits: int,
+}
+
+export struct CharListItem {
+    uuid:      string,
+    bit:       int,
+    slot:      int,
+    slot-max:  int,
+    name:      string,
+    elements:  string,
+    count:     int,
+    editable:  bool,
+    selected:  bool,
+}
+
+export struct SequenceItem {
+    index:        int,
+    kind:         string,
+    code:         int,
+    categories:   string,
+    literal:      string,
+    entropy-bits: int,
+    width:        int,
+    x-offset:     int,
+}
+
+export struct PositionDetail {
+    visible:      bool,
+    kind:         string,
+    index:        int,
+    code:         int,
+    fixed-value:  string,
+    entropy-bits: int,
+}
+
+component RestrictionListItem inherits Rectangle {
+    in property <string> name;
+    in property <string> format-visual;
+    in property <int>    domain-count;
+    in property <bool>   selected: false;
+
+    callback clicked;
+
+    height:        56px;
+    border-radius: 6px;
+    background:    selected ? Palette.bg-active : ta.has-hover ? Palette.bg-hover : transparent;
+    animate background { duration: 120ms; }
+
+    ta := TouchArea { clicked => { root.clicked(); } }
+
+    Rectangle {
+        x:             0px;
+        y:             (parent.height - self.height) / 2;
+        width:         3px;
+        height:        28px;
+        border-radius: 2px;
+        background:    root.selected ? Palette.accent : transparent;
+        animate background { duration: 150ms; }
+    }
+
+    HorizontalLayout {
+        padding-left:  16px;
+        padding-right: 12px;
+        spacing:       10px;
+        alignment:     start;
+
+        VerticalLayout {
+            alignment: center;
+            IconLock { size: 16px; }
+        }
+
+        VerticalLayout {
+            alignment:          center;
+            horizontal-stretch: 1;
+            spacing:            2px;
+
+            Text {
+                text:        root.name;
+                font-size:   13px;
+                font-weight: root.selected ? 700 : 400;
+                color:       root.selected ? Palette.text-heading : Palette.text-primary;
+                overflow:    elide;
+                animate color { duration: 120ms; }
+            }
+
+            HorizontalLayout {
+                spacing: 6px;
+
+                Text {
+                    text:      root.format-visual;
+                    font-size: 11px;
+                    color:     Palette.text-muted;
+                    overflow:  elide;
+                }
+
+                Text {
+                    text:      "·";
+                    font-size: 11px;
+                    color:     Palette.text-muted;
+                }
+
+                Text {
+                    text:      root.domain-count + " dom.";
+                    font-size: 11px;
+                    color:     Palette.text-muted;
+                }
+            }
+        }
+
+        Text {
+            text:               root.selected ? ">" : "";
+            color:              Palette.accent;
+            font-size:          18px;
+            vertical-alignment: center;
+        }
+    }
+}
+component CharListCheckbox inherits Rectangle {
+    in property <CharListItem> item;
+    in property <bool> enabled: true;
+
+    callback toggled();
+
+    height:        34px;
+    border-radius: 6px;
+    border-width:  1px;
+    border-color:  item.selected ? Palette.accent : Palette.border;
+    background:    !root.enabled ? Palette.bg-input : item.selected ? Palette.bg-active : Palette.bg-input;
+    opacity:       root.enabled ? 1.0 : 0.55;
+
+    animate background { duration: 100ms; }
+
+    TouchArea {
+        enabled: root.enabled;
+        clicked => { root.toggled(); }
+    }
+
+    HorizontalLayout {
+        padding-left:  10px;
+        padding-right: 10px;
+        spacing:       8px;
+        alignment:     start;
+
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width:         16px;
+                height:        16px;
+                border-radius: 3px;
+                border-width:  2px;
+                border-color:  item.selected ? Palette.accent : Palette.border;
+                background:    item.selected ? Palette.accent : transparent;
+                animate border-color { duration: 120ms; }
+                animate background   { duration: 120ms; }
+
+                if item.selected : IconCheck {
+                    size:       10px;
+                    icon-color: Palette.bg-base;
+                    x: (parent.width  - self.width)  / 2;
+                    y: (parent.height - self.height) / 2;
+                }
+            }
+        }
+        Text {
+            text:               item.name;
+            font-size:          12px;
+            color:              item.selected ? Palette.text-heading : Palette.text-primary;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            overflow:           elide;
+        }
+        Text {
+            text:               item.count + " opções";
+            font-size:          11px;
+            color:              Palette.text-muted;
+            vertical-alignment: center;
+        }
+    }
+}
+
+component PositionCard inherits Rectangle {
+    in property <SequenceItem> item;
+    in property <string> view-mode; // "position" | "code"
+    in property <bool>   is-drag-source;
+
+    callback drag-started();
+    callback drag-moved(length /*local-x*/, length /*local-y*/);
+    callback dropped();
+    callback view-clicked();
+    callback scroll-requested(length /*delta-y*/);
+
+    x:      item.x-offset * 1px;
+    width:  item.width * 1px;
+    height: 44px;
+    y:      4px;
+    border-radius: 8px;
+    opacity: root.is-drag-source ? 0.45 : 1.0;
+    background: item.kind == "fixed"  ? #ffffff : item.kind == "default" ? #4b5263 : #1a2e40;
+    border-width: 1px;
+    border-color: item.kind == "fixed" ? Palette.border : transparent;
+    animate opacity { duration: 100ms; }
+
+    ta := TouchArea {
+        moved => {
+            if self.pressed && !root.is-drag-source {
+                if (self.mouse-x - self.pressed-x) > 6px || (self.pressed-x - self.mouse-x) > 6px {
+                    root.drag-started();
+                }
+            }
+            if root.is-drag-source {
+                root.drag-moved(item.x-offset * 1px + self.mouse-x, root.y + self.mouse-y);
+            }
+        }
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.up {
+                if root.is-drag-source {
+                    root.dropped();
+                } else {
+                    root.view-clicked();
+                }
+            }
+        }
+
+        scroll-event(event) => {
+            if root.is-drag-source {
+                root.scroll-requested(event.delta-y);
+                return EventResult.accept;
+            }
+            return EventResult.reject;
+        }
+    }
+
+    Text {
+        text: item.kind == "fixed" ? item.literal : view-mode == "code"   ? item.code : item.index;
+        font-size:   13px;
+        font-weight: 700;
+        color:       item.kind == "fixed" ? #1a1a1a : Palette.text-heading;
+        horizontal-alignment: center;
+        vertical-alignment:   center;
+        width: 100%;
+        height: 100%;
+    }
+}
+
+component DropGap inherits Rectangle {
+    in property <bool> active;
+    in property <bool> dragging;
+
+    width:  14px;
+    height: 44px;
+    y: 4px;
+    border-radius: 3px;
+    background: root.active ? Palette.accent : root.dragging ? Palette.bg-hover : transparent;
+    animate background { duration: 80ms; }
+}
+
+component SequenceRow inherits Rectangle {
+    in property <[SequenceItem]> sequence;
+    in property <string> view-mode;
+    in property <int>    sequence-end-x;
+    in property <bool>   editable: true;
+    in property <bool>   example-enabled: false;
+    callback view-example();
+
+    width:     100%;
+    min-width: 0px;
+    clip:      true;
+
+    in-out property <bool>   dragging:         false;
+    in-out property <string> drag-kind:        "";
+    in-out property <int>    drag-source-index: -1;
+    in property <int>        drag-target-gap:   -1;
+
+    in-out property <string> card-fixed-value: "";
+    in-out property <string> card-quantity-text: "1";
+
+    in-out property <int> drag-x: 0;
+
+    // Autoscroll horizontal baseado na posição 
+    private property <length> drag-visible-x: root.drag-x * 1px + scroll-view.viewport-x;
+    private property <bool> hover-scroll-left:  root.dragging && root.drag-visible-x < 44px;
+    private property <bool> hover-scroll-right: root.dragging && root.drag-visible-x > (scroll-view.width - 44px);
+
+    in-out property <int> drag-y: 0;
+    private property <bool> drag-over-trash: root.dragging && root.drag-kind == "existing" && root.drag-y > 78;
+
+    out property <length> content-abs-x:    scroll-view.absolute-position.x;
+    out property <length> content-viewport-x: scroll-view.viewport-x;
+
+    callback drag-move(int /*local-x-px*/);
+    callback commit-reorder(int /*source*/, int /*target*/);
+    callback commit-remove(int /*index*/);
+    callback view-position(int /*index*/);
+
+    height: 122px;
+
+    Timer {
+        interval: 16ms;
+        running: root.dragging && (root.hover-scroll-left || root.hover-scroll-right);
+        triggered => {
+            if root.hover-scroll-left {
+                scroll-view.viewport-x = min(scroll-view.viewport-x + 12px, 0px);
+            }
+            if root.hover-scroll-right {
+                scroll-view.viewport-x = max(
+                    scroll-view.viewport-x - 12px,
+                    root.width - scroll-view.viewport-width,
+                );
+            }
+        }
+    }
+
+    function end-commit() {
+        if root.drag-kind == "existing" && root.drag-over-trash {
+            root.commit-remove(root.drag-source-index);
+        } else if root.drag-kind == "existing" && root.drag-target-gap >= 0 {
+            root.commit-reorder(root.drag-source-index, root.drag-target-gap);
+        }
+        root.dragging          = false;
+        root.drag-kind         = "";
+        root.drag-source-index = -1;
+        root.drag-x            = 0;
+        root.drag-y            = 0;
+    }
+
+    VerticalLayout {
+        spacing:   4px;
+        width:     100%;
+        min-width: 0px;
+
+        bar-wrap := Rectangle {
+        width:  100%;
+        height: 78px;
+
+        scroll-view := ScrollView {
+            width:     100%;
+            min-width: 0px;
+            // 52px dos cards + margem para a faixa da scrollbar não tocar/cobrir os cards
+            height:    78px;
+
+            horizontal-scrollbar-policy: always-on;
+            vertical-scrollbar-policy:   always-off;
+
+            viewport-width: max(root.sequence-end-x + 220, root.width / 1px) * 1px;
+
+            Rectangle {
+                width:  scroll-view.viewport-width;
+                height: 52px;
+                border-radius: 8px;
+
+                background:    Palette.bg-hover;
+                border-width:  1px;
+                border-color:  Palette.bg-base;
+
+                wheel-ta := TouchArea {
+                    width:  100%;
+                    height: 100%;
+                    scroll-event(event) => {
+                        scroll-view.viewport-x = max(
+                            min(scroll-view.viewport-x - event.delta-y, 0px),
+                            root.width - scroll-view.viewport-width,
+                        );
+                        return EventResult.accept;
+                    }
+                }
+
+                if root.sequence.length == 0 : Text {
+                    text:                 "Arraste para aqui...";
+                    font-size:            12px;
+                    color:                Palette.text-muted;
+                    horizontal-alignment: center;
+                    vertical-alignment:   center;
+                    width:                100%;
+                    height:               100%;
+                }
+
+                for item[i] in root.sequence : Rectangle {
+                    DropGap {
+                        x: (item.x-offset - 14) * 1px;
+                        active:   root.dragging && root.drag-target-gap == i && !root.drag-over-trash;
+                        dragging: root.dragging;
+                    }
+
+                    PositionCard {
+                        item:          item;
+                        view-mode:     root.view-mode;
+                        is-drag-source: root.dragging && root.drag-kind == "existing" && root.drag-source-index == i;
+
+                        drag-started => {
+                            if root.editable {
+                                root.dragging          = true;
+                                root.drag-kind         = "existing";
+                                root.drag-source-index = i;
+                            }
+                        }
+                        drag-moved(x, y) => {
+                            root.drag-x = x / 1px;
+                            root.drag-y = y / 1px;
+                            root.drag-move(x / 1px);
+                        }
+                        dropped       => { root.end-commit(); }
+                        view-clicked  => { root.view-position(i); }
+                        scroll-requested(delta) => {
+                            scroll-view.viewport-x = max(
+                                min(scroll-view.viewport-x - delta, 0px),
+                                root.width - scroll-view.viewport-width,
+                            );
+                        }
+                    }
+                }
+
+                // Gap final, depois da última posição.
+                DropGap {
+                    x: (root.sequence-end-x - 14) * 1px;
+                    active:   root.dragging && root.drag-target-gap == root.sequence.length && !root.drag-over-trash;
+                    dragging: root.dragging;
+                }
+            }
+        }
+        }
+
+        if root.sequence.length > 0 : HorizontalLayout {
+            alignment: center;
+            spacing:   16px;
+
+            VerticalLayout {
+                alignment: center;
+
+                Rectangle {
+                    width: 48px;
+                    height: 32px;
+                    border-radius: 8px;
+                    border-width: 1px;
+                    border-color: root.drag-over-trash ? Palette.danger : Palette.border;
+                    background:   root.drag-over-trash ? Palette.bg-danger : Palette.bg-input;
+                    animate background { duration: 100ms; }
+
+                    IconTrash {
+                        x: (parent.width  - self.width)  / 2;
+                        y: (parent.height - self.height) / 2;
+                        size:       16px;
+                        icon-color: root.drag-over-trash ? Palette.danger : Palette.text-muted;
+                    }
+                }
+            }
+
+            VerticalLayout {
+                alignment: center;
+                Button {
+                    text:    "Ver exemplo";
+                    enabled: root.example-enabled;
+                    clicked => { root.view-example(); }
+                }
+            }
+        }
+    }
+}
+
+component AddRestrictionForm inherits VerticalLayout {
+    in property <string> error: "";
+
+    callback on-submit(string /*name*/);
+    callback on-cancel();
+
+    alignment: start;
+    spacing: 20px;
+    padding: WindowMetrics.avail-width < 700px ? 12px : 24px;
+    width:     100%;
+    min-width: 0px;
+
+    SectionTitle {
+        title:    "Adicionar restrição";
+        subtitle: "Uma restrição define o formato e os caracteres das senhas derivadas.";
+    }
+
+    Divider {}
+
+    name-field := LabeledInput {
+        label:       "Nome da restrição";
+        placeholder: "ex: Padrão, Alta segurança, Numérica";
+        hint:        "Identifica esta política de formato";
+    }
+
+    MessageBanner {
+        message: "Os parâmetros de formato (sequência, máscaras, listas de caracteres) podem ser editados após a criação.";
+        variant: "info";
+    }
+
+    MessageBanner {
+        message: root.error;
+        variant: "error";
+    }
+
+    HorizontalLayout {
+        alignment: end;
+        spacing:   10px;
+
+        Button {
+            text: "Cancelar";
+            clicked => { root.on-cancel(); }
+        }
+
+        Button {
+            text:    "Criar restrição  ->";
+            primary: true;
+            enabled: name-field.value != "";
+            clicked => { root.on-submit(name-field.value); }
+        }
+    }
+}
+
+component CharListRow inherits Rectangle {
+    in property <CharListItem> item;
+    in property <bool>         actions-enabled: true;
+
+    private property <bool>   editing: false;
+    private property <string> edit-value: "";
+    private property <bool>   expanded: false;
+    private property <string> special-char-value: "";
+    private property <bool>   narrow: WindowMetrics.avail-width < 480px;
+
+    callback on-save-elements(string /*elements_csv*/);
+    callback on-remove();
+
+    border-radius: 6px;
+    background:    Palette.bg-input;
+    border-width:  1px;
+    border-color:  Palette.border;
+
+    VerticalLayout {
+        Rectangle {
+            height: 44px;
+
+            TouchArea {
+                clicked => { root.expanded = !root.expanded; }
+            }
+
+            HorizontalLayout {
+                padding-left:  12px;
+                padding-right: 8px;
+                spacing:       10px;
+                alignment:     start;
+
+                VerticalLayout {
+                    alignment: center;
+                    IconChevron { size: 10px; expanded: root.expanded; }
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width:         40px;
+                        height:        26px;
+                        border-radius: 4px;
+                        background:    #1a2e40;
+
+                        Text {
+                            text:               item.slot + "/" + item.slot-max;
+                            font-size:          11px;
+                            font-weight:        700;
+                            color:              Palette.accent;
+                            horizontal-alignment: center;
+                            vertical-alignment:   center;
+                        }
+                    }
+                }
+
+                Text {
+                    text:               item.name;
+                    font-size:          13px;
+                    font-weight:        600;
+                    color:              Palette.text-primary;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                    overflow:           elide;
+                }
+
+                Text {
+                    text:               item.count + " elem.";
+                    font-size:          11px;
+                    color:              Palette.text-muted;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        if root.expanded : VerticalLayout {
+            padding-left:  12px;
+            padding-right: 12px;
+            padding-bottom: 12px;
+            spacing:       10px;
+
+            Rectangle {
+                height: 1px;
+                background: Palette.border;
+            }
+
+            if !root.editing : Text {
+                text:        item.elements;
+                font-size:   12px;
+                color:       Palette.text-heading;
+                wrap:        word-wrap;
+                font-family: item.bit == 4 ? "Noto Emoji" : "Noto Sans";
+            }
+
+            if root.editing : LineEdit {
+                text: root.edit-value;
+                edited(v) => { root.edit-value = v; }
+            }
+
+            if root.editing : VerticalLayout {
+                spacing: 4px;
+
+                Text {
+                    text:      "Adicionar carácter especial (aceita qualquer carácter, incl. espaço/vírgula):";
+                    font-size: 11px;
+                    color:     Palette.text-muted;
+                    wrap:      word-wrap;
+                }
+
+                if !root.narrow : HorizontalLayout {
+                    spacing: 6px;
+
+                    LineEdit {
+                        horizontal-stretch: 1;
+                        text <=> root.special-char-value;
+                    }
+
+                    Button {
+                        text:    "Adicionar";
+                        enabled: root.special-char-value != "";
+                        clicked => {
+                            root.edit-value = root.edit-value + (root.edit-value == "" ? "" : ", ") + "{" + root.special-char-value + "}";
+                            root.special-char-value = "";
+                        }
+                    }
+                }
+
+                if root.narrow : VerticalLayout {
+                    spacing: 6px;
+
+                    LineEdit {
+                        width: 100%;
+                        text <=> root.special-char-value;
+                    }
+
+                    Button {
+                        text:    "Adicionar";
+                        width:   100%;
+                        enabled: root.special-char-value != "";
+                        clicked => {
+                            root.edit-value = root.edit-value + (root.edit-value == "" ? "" : ", ") + "{" + root.special-char-value + "}";
+                            root.special-char-value = "";
+                        }
+                    }
+                }
+            }
+
+            HorizontalLayout {
+                spacing:   8px;
+                alignment: end;
+
+                if !root.editing : Button {
+                    text:    "Copiar";
+                    clicked => { ClipboardActions.copy(item.elements); }
+                }
+
+                if item.editable && !root.editing : Button {
+                    text:    "Editar elementos";
+                    enabled: root.actions-enabled;
+                    clicked => {
+                        root.edit-value = item.elements;
+                        root.editing    = true;
+                    }
+                }
+
+                if root.editing : Button {
+                    text:    "Cancelar";
+                    clicked => { root.editing = false; }
+                }
+
+                if root.editing : Button {
+                    text:    "Guardar";
+                    primary: true;
+                    enabled: root.actions-enabled;
+                    clicked => {
+                        root.on-save-elements(root.edit-value);
+                        root.editing = false;
+                    }
+                }
+
+                if item.editable && !root.editing : Rectangle {
+                    width:         32px;
+                    height:        32px;
+                    border-radius: 4px;
+                    background:    rm-ta.has-hover && root.actions-enabled ? Palette.bg-danger : transparent;
+                    animate background { duration: 100ms; }
+
+                    rm-ta := TouchArea {
+                        enabled: root.actions-enabled;
+                        clicked => { root.on-remove(); }
+                    }
+
+                    IconClose {
+                        x: (parent.width  - self.width)  / 2;
+                        y: (parent.height - self.height) / 2;
+                        size:       10px;
+                        icon-color: rm-ta.has-hover && root.actions-enabled ? Palette.danger : Palette.text-muted;
+                    }
+                }
+            }
+        }
+    }
+}
+
+component RestrictionDetailPanel inherits VerticalLayout {
+    in property <RestrictionItem>   restriction;
+    in property <[SequenceItem]>    sequence;
+    in property <[CharListItem]>    char-lists;
+    in property <[CharListItem]>    card-char-lists;
+    in property <[CharListItem]>    position-char-lists;
+    in property <PositionDetail>    position-detail;
+    in property <SequenceItem>      card-preview;
+    in property <int>               sequence-end-x;
+    in property <int>               drag-target-gap;
+    in property <bool>              drag-over-trash;
+
+    in property <string> error-rename:       "";
+    in property <string> error-sequence:     "";
+    in property <string> error-charlist:     "";
+
+    in-out property <bool>   show-rename-form:       false;
+    in-out property <bool>   show-add-charlist-form: false;
+    private property <string> new-charlist-special-char: "";
+    in-out property <bool>   show-default-pattern:   false;
+    in-out property <string> view-mode:              "position";
+    in-out property <string> extend-entropy-bits:    "96";
+
+    private property <bool> editable: restriction.domain-count == 0;
+    private property <bool> narrow:   WindowMetrics.avail-width < 420px;
+    private property <bool> extend-row-narrow: WindowMetrics.avail-width < 640px;
+
+    private property <int> card-preview-qty: max(seq-row.card-quantity-text.to-float(), 1);
+    private property <int> card-preview-total-entropy-bits: root.card-preview.entropy-bits * root.card-preview-qty;
+
+    private property <bool> card-preview-ready:
+        (root.card-preview.kind == "fixed"   && seq-row.card-fixed-value != "") ||
+        (root.card-preview.kind == "default") ||
+        (root.card-preview.kind == "custom"   && root.card-preview.code != 0);
+
+    private property <string> card-preview-text:
+        root.card-preview.kind == "fixed"
+            ? seq-row.card-fixed-value
+            : (root.view-mode == "code" ? root.card-preview.code : "+") + (root.card-preview-qty > 1 ? " (× " + seq-row.card-quantity-text + ")" : "");
+
+    private property <length> card-preview-width:
+        root.card-preview.kind == "fixed"
+            ? (seq-row.card-fixed-value.character-count * 9 + 24) * 1px
+            : max(root.card-preview-text.character-count * 9 + 24, 44) * 1px;
+
+    in property <length>     scroll-abs-y: 0px;
+    in property <length>     scroll-height: 0px;
+    in-out property <length> scroll-viewport-y: 0px;
+    in property <length>     scroll-viewport-height: 0px;
+
+    private property <length> drag-abs-y: seq-row.absolute-position.y + seq-row.drag-y * 1px;
+    private property <bool>   v-hover-scroll-up:   seq-row.dragging && (root.drag-abs-y - root.scroll-abs-y) < 60px;
+    private property <bool>   v-hover-scroll-down: seq-row.dragging && (root.drag-abs-y - root.scroll-abs-y) > (root.scroll-height - 60px);
+
+    Timer {
+        interval: 16ms;
+        running: root.v-hover-scroll-up || root.v-hover-scroll-down;
+        triggered => {
+            if root.v-hover-scroll-up {
+                root.scroll-viewport-y = min(root.scroll-viewport-y + 12px, 0px);
+            }
+            if root.v-hover-scroll-down {
+                root.scroll-viewport-y = max(
+                    root.scroll-viewport-y - 12px,
+                    root.scroll-height - root.scroll-viewport-height,
+                );
+            }
+        }
+    }
+
+    callback go-to-domains();
+
+    callback on-rename(string /*new_name*/);
+    callback on-toggle-list(int /*bit*/);
+    callback on-reset-default();
+    callback on-set-default-mask();
+    callback on-select-card-kind(string /*kind*/);
+    callback on-toggle-card-mask-list(int /*bit*/);
+    callback on-clear-card-config();
+    callback on-clear-sequence();
+    callback on-drag-move(int);
+    callback on-reorder-position(int, int);
+    callback on-insert-positions(int, string, string, int);
+    callback on-extend-entropy(string);
+    callback on-remove-sequence-item(int);
+    callback on-view-position(int);
+    callback on-close-position-detail();
+    callback on-remove-viewed-position();
+    callback on-toggle-position-mask-list(int /*bit*/);
+    callback on-add-charlist(string /*name*/, string /*elements_csv*/);
+    callback on-edit-charlist-elements(string /*charlist_uuid*/, string /*elements_csv*/);
+    callback on-remove-charlist(string /*charlist_uuid*/);
+    callback on-generate-default-format();
+    callback on-view-example();
+    callback on-remove();
+
+    alignment: start;
+    spacing:  20px;
+    padding: WindowMetrics.avail-width < 700px ? 12px : 24px;
+    width:     100%;
+    min-width: 0px;
+
+    property <bool> very-narrow: WindowMetrics.avail-width < 400px;
+    property <bool> header-narrow: WindowMetrics.avail-width < 520px;
+
+    if !root.header-narrow : HorizontalLayout {
+        spacing:   12px;
+        alignment: start;
+
+        VerticalLayout {
+            alignment: center;
+            IconLock { size: 24px; }
+        }
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            spacing: 2px;
+            alignment: center;
+
+            Text {
+                text:        restriction.name;
+                font-size:   20px;
+                font-weight: 700;
+                color:       Palette.text-heading;
+            }
+
+            Text {
+                text:      restriction.uuid;
+                font-size: 11px;
+                color:     Palette.text-muted;
+                overflow:  elide;
+            }
+        }
+
+        Button {
+            text:    "Domínios  (" + restriction.domain-count + ")";
+            primary: true;
+            clicked => { root.go-to-domains(); }
+        }
+    }
+
+    if root.header-narrow : VerticalLayout {
+        spacing: 8px;
+
+        HorizontalLayout {
+            spacing:   12px;
+            alignment: start;
+
+            VerticalLayout {
+                alignment: center;
+                IconLock { size: 22px; }
+            }
+
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: 2px;
+
+                Text {
+                    text:        restriction.name;
+                    font-size:   18px;
+                    font-weight: 700;
+                    color:       Palette.text-heading;
+                    overflow:    elide;
+                }
+
+                Text {
+                    text:      restriction.uuid;
+                    font-size: 11px;
+                    color:     Palette.text-muted;
+                    overflow:  elide;
+                }
+            }
+        }
+
+        Button {
+            text:    "Domínios  (" + restriction.domain-count + ")";
+            primary: true;
+            width:   100%;
+            clicked => { root.go-to-domains(); }
+        }
+    }
+
+    Divider {}
+
+    if !root.very-narrow : HorizontalLayout {
+        spacing: 10px;
+
+        for stat-data in [
+            { label: "Posições", value: restriction.sequence-len, color: Palette.accent },
+            { label: "Listas",   value: restriction.char-list-count, color: Palette.info },
+            { label: "Domínios", value: restriction.domain-count,  color: Palette.success },
+        ] : Rectangle {
+            horizontal-stretch: 1;
+            min-height:    60px;
+            background:    Palette.bg-panel;
+            border-radius: 8px;
+            border-width:  1px;
+            border-color:  Palette.border;
+
+            VerticalLayout {
+                alignment: center;
+                padding:   10px;
+                spacing:   2px;
+
+                Text {
+                    text:               stat-data.value;
+                    font-size:          20px;
+                    font-weight:        700;
+                    color:              stat-data.color;
+                    horizontal-alignment: center;
+                    wrap:               word-wrap;
+                }
+
+                Text {
+                    text:               stat-data.label;
+                    font-size:          11px;
+                    color:              Palette.text-muted;
+                    horizontal-alignment: center;
+                    wrap:               word-wrap;
+                }
+            }
+        }
+    }
+
+    if root.very-narrow : VerticalLayout {
+        spacing: 8px;
+
+        for stat-data in [
+            { label: "Posições", value: restriction.sequence-len, color: Palette.accent },
+            { label: "Listas",   value: restriction.char-list-count, color: Palette.info },
+            { label: "Domínios", value: restriction.domain-count,  color: Palette.success },
+        ] : Rectangle {
+            min-height:    48px;
+            background:    Palette.bg-panel;
+            border-radius: 8px;
+            border-width:  1px;
+            border-color:  Palette.border;
+
+            HorizontalLayout {
+                padding:   10px;
+                spacing:   8px;
+                alignment: start;
+
+                Text {
+                    text:               stat-data.value;
+                    font-size:          18px;
+                    font-weight:        700;
+                    color:              stat-data.color;
+                }
+
+                Text {
+                    text:               stat-data.label;
+                    font-size:          12px;
+                    color:              Palette.text-muted;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+
+    // Config técnica
+    Rectangle {
+        background:    Palette.bg-panel;
+        border-radius: 8px;
+        border-width:  1px;
+        border-color:  Palette.border;
+
+        VerticalLayout {
+            padding: 16px;
+            spacing: 8px;
+
+            Text {
+                text:        "Configuração";
+                font-size:   13px;
+                font-weight: 700;
+                color:       Palette.text-muted;
+            }
+
+            Divider {}
+
+            KeyValueRow { label: "Formato visual";   value: restriction.format-visual;   force-stacked: true; }
+            KeyValueRow { label: "Entropia total";   value: restriction.total-entropy-bits + " bits"; force-stacked: true; }
+            KeyValueRow { label: "Bytes XOF (KMAC)"; value: restriction.bytes-to-derive; force-stacked: true; }
+            KeyValueRow { label: "Device UUID";      value: restriction.device-uuid;     copyable: true; force-stacked: true; }
+        }
+    }
+
+    if !editable : MessageBanner {
+        message: "Esta restrição tem domínios associados. Remova-os primeiro para poder editar o formato.";
+        variant: "warning";
+    }
+
+    if restriction.total-entropy-bits < 96 : MessageBanner {
+        message: "Esta restrição usa " + restriction.total-entropy-bits + " bits de entropia - abaixo do mínimo recomendado (96 bits). Aumente o formato se possível (veja \"Estender entropia\" em Formato Padrão).";
+        variant: "warning";
+    }
+
+    Rectangle {
+        background:    Palette.bg-panel;
+        border-radius: 8px;
+        border-width:  1px;
+        border-color:  Palette.border;
+        width:         100%;
+        min-width:     0px;
+        clip:          true;
+
+        VerticalLayout {
+            padding:   16px;
+            spacing:   12px;
+            width:     100%;
+            min-width: 0px;
+
+            // Título
+            Text {
+                text:        "Sequência de formato";
+                font-size:   13px;
+                font-weight: 700;
+                color:       Palette.text-muted;
+            }
+
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: start;
+
+                Rectangle {
+                    width:         150px;
+                    height:        28px;
+                    border-radius: 5px;
+                    background:    Palette.bg-input;
+                    border-width:  1px;
+                    border-color:  Palette.border;
+
+                    HorizontalLayout {
+                        padding: 2px;
+                        spacing: 2px;
+
+                        Rectangle {
+                            border-radius: 4px;
+                            background: root.view-mode == "position" ? Palette.accent : transparent;
+                            TouchArea { clicked => { root.view-mode = "position"; } }
+                            Text {
+                                text: "Posição";
+                                font-size: 10px;
+                                color: root.view-mode == "position" ? Palette.bg-base : Palette.text-muted;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                                width: 100%;
+                                height: 100%;
+                            }
+                        }
+                        Rectangle {
+                            border-radius: 4px;
+                            background: root.view-mode == "code" ? Palette.accent : transparent;
+                            TouchArea { clicked => { root.view-mode = "code"; } }
+                            Text {
+                                text: "Código";
+                                font-size: 10px;
+                                color: root.view-mode == "code" ? Palette.bg-base : Palette.text-muted;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                                width: 100%;
+                                height: 100%;
+                            }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    width:         28px;
+                    height:        28px;
+                    border-radius: 5px;
+                    background:    gen-fmt-ta.has-hover ? Palette.bg-hover : Palette.bg-input;
+                    border-width:  1px;
+                    border-color:  Palette.border;
+
+                    gen-fmt-ta := TouchArea {
+                        enabled: root.editable;
+                        clicked => { root.on-generate-default-format(); }
+                    }
+
+                    IconRefresh {
+                        size:       14px;
+                        icon-color: Palette.text-primary;
+                        x: (parent.width  - self.width)  / 2;
+                        y: (parent.height - self.height) / 2;
+                    }
+                }
+            }
+
+
+            // Secção "Formato Padrão" - colapsável
+            Rectangle {
+                background:    Palette.bg-input;
+                border-radius: 6px;
+                border-width:  1px;
+                border-color:  Palette.border;
+
+                VerticalLayout {
+                    padding: 10px;
+                    spacing: 8px;
+
+                    Rectangle {
+                        width:  100%;
+                        height: 24px;
+
+                        fmt-header-ta := TouchArea {
+                            width:   100%;
+                            height:  100%;
+                            clicked => { root.show-default-pattern = !root.show-default-pattern; }
+                        }
+
+                        HorizontalLayout {
+                            width:   100%;
+                            height:  100%;
+                            spacing: 6px;
+
+                            VerticalLayout {
+                                alignment: center;
+                                IconChevron { size: 10px; expanded: root.show-default-pattern; }
+                            }
+
+                            Text {
+                                text: "Formato Padrão";
+                                font-size: 12px;
+                                font-weight: 700;
+                                color: Palette.text-primary;
+                                horizontal-stretch: 1;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+
+                    if root.show-default-pattern : VerticalLayout {
+                        spacing: 8px;
+
+                        Text {
+                            text:      "Listas de caracteres usadas pelas posições \"Padrão\" (código 0):";
+                            font-size: 11px;
+                            color:     Palette.text-muted;
+                            wrap:      word-wrap;
+                        }
+
+                        for cl in root.char-lists : CharListCheckbox {
+                            item:    cl;
+                            enabled: root.editable;
+                            toggled => { root.on-toggle-list(cl.bit); }
+                        }
+
+                        Divider {}
+
+                        Text {
+                            text:      "Estender entropia: adiciona posições \"Padrão\" (usando o formato definido acima) ao fim da sequência actual, até a restrição atingir os bits indicados.";
+                            font-size: 11px;
+                            color:     Palette.text-muted;
+                            wrap:      word-wrap;
+                        }
+
+                        if !root.extend-row-narrow : HorizontalLayout {
+                            spacing: 10px;
+                            alignment: start;
+
+                            Button {
+                                text:    "Estender entropia";
+                                enabled: root.editable;
+                                clicked => { root.on-extend-entropy(root.extend-entropy-bits); }
+                            }
+
+                            VerticalLayout {
+                                alignment: center;
+                                spacing: 4px;
+
+                                extend-bits-input := LineEdit {
+                                    width: 64px;
+                                    text <=> root.extend-entropy-bits;
+                                    horizontal-alignment: center;
+                                }
+                            }
+
+                            Rectangle { horizontal-stretch: 1; }
+
+                            VerticalLayout {
+                                alignment: center;
+                                Button {
+                                    text: "Repor padrão";
+                                    clicked => { root.on-reset-default(); }
+                                }
+                            }
+                        }
+
+                        if root.extend-row-narrow : VerticalLayout {
+                            spacing: 8px;
+
+                            Button {
+                                text:    "Estender entropia";
+                                width:   100%;
+                                enabled: root.editable;
+                                clicked => { root.on-extend-entropy(root.extend-entropy-bits); }
+                            }
+
+                            extend-bits-input-narrow := LineEdit {
+                                width: 100%;
+                                text <=> root.extend-entropy-bits;
+                                horizontal-alignment: center;
+                            }
+
+                            Button {
+                                text:    "Repor padrão";
+                                width:   100%;
+                                clicked => { root.on-reset-default(); }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if restriction.sequence-len == 0 : Rectangle {
+                background:    #2e2714;
+                border-radius: 6px;
+                border-width:  1px;
+                border-color:  Palette.warning;
+
+                VerticalLayout {
+                    padding: 10px;
+                    spacing: 4px;
+
+                    Text {
+                        text:        "Esta restrição não tem formato definido.";
+                        font-size:   12px;
+                        font-weight: 700;
+                        color:       Palette.warning;
+                        wrap:        word-wrap;
+                    }
+                    Text {
+                        text:      "Não é possível criar domínios sem um formato. Use \"Gerar novo formato\" acima ou gere um card abaixo e arraste-o para a linha.";
+                        font-size: 11px;
+                        color:     Palette.text-muted;
+                        wrap:      word-wrap;
+                    }
+                }
+            }
+
+            // Linha de cards (drag-and-drop)
+            seq-row := SequenceRow {
+                sequence:       root.sequence;
+                view-mode:      root.view-mode;
+                sequence-end-x: root.sequence-end-x;
+                drag-target-gap: root.drag-target-gap;
+                editable:        root.editable;
+                example-enabled: restriction.sequence-len > 0;
+
+                drag-move(x)                => { root.on-drag-move(x); }
+                commit-reorder(src, tgt)    => { root.on-reorder-position(src, tgt); }
+                commit-remove(idx)          => { root.on-remove-sequence-item(idx); }
+                view-position(idx)          => { root.on-view-position(idx); }
+                view-example                => { root.on-view-example(); }
+            }
+
+            // Painel "Posição X" / "Gerar card/conjunto"
+            if root.position-detail.visible : Rectangle {
+                background:    Palette.bg-base;
+                border-radius: 6px;
+                border-width:  1px;
+                border-color:  Palette.accent;
+
+                VerticalLayout {
+                    padding: 12px;
+                    spacing: 10px;
+
+                    Text {
+                        text:        "Posição " + root.position-detail.index + " · código " + root.position-detail.code;
+                        font-size:   13px;
+                        font-weight: 700;
+                        color:       Palette.text-heading;
+                    }
+
+                    if root.position-detail.kind == "fixed" : KeyValueRow {
+                        label: "Valor";
+                        value: root.position-detail.fixed-value;
+                    }
+
+                    if root.position-detail.kind != "fixed" : Text {
+                        text: "Entropia: " + root.position-detail.entropy-bits + " bits";
+                        font-size: 11px;
+                        color: Palette.text-muted;
+                    }
+
+                    if root.position-detail.kind == "default" : VerticalLayout {
+                        spacing: 6px;
+                        for cl in root.char-lists : CharListCheckbox {
+                            item:    cl;
+                            enabled: false;
+                        }
+                    }
+
+                    if root.position-detail.kind == "custom" : VerticalLayout {
+                        spacing: 6px;
+                        for cl in root.position-char-lists : CharListCheckbox {
+                            item:    cl;
+                            enabled: root.editable;
+                            toggled => { root.on-toggle-position-mask-list(cl.bit); }
+                        }
+                    }
+
+                    HorizontalLayout {
+                        alignment: end;
+                        spacing: 8px;
+
+                        Button {
+                            text: "Fechar";
+                            clicked => { root.on-close-position-detail(); }
+                        }
+                        Button {
+                            text:    "Remover";
+                            enabled: root.editable;
+                            clicked => { root.on-remove-viewed-position(); }
+                        }
+                    }
+                }
+            }
+
+            Rectangle {
+                background:    Palette.bg-base;
+                border-radius: 6px;
+                border-width:  1px;
+                border-color:  root.card-preview.kind != "" ? Palette.accent : Palette.border;
+
+                VerticalLayout {
+                    padding: 12px;
+                    spacing: 10px;
+
+                    Text {
+                        text:        "Gerar Card";
+                        font-size:   13px;
+                        font-weight: 700;
+                        color:       Palette.text-heading;
+                    }
+
+                    if !root.narrow : HorizontalLayout {
+                        spacing: 6px;
+
+                        for kind-opt in ["default", "custom", "fixed"] : Rectangle {
+                            min-width:     90px;
+                            height:        36px;
+                            border-radius: 5px;
+                            border-width:  1px;
+                            border-color:  root.card-preview.kind == kind-opt ? Palette.accent : Palette.border;
+                            background:    root.card-preview.kind == kind-opt ? Palette.bg-active : Palette.bg-input;
+                            animate background { duration: 120ms; }
+
+                            TouchArea {
+                                enabled: root.editable;
+                                clicked => { root.on-select-card-kind(kind-opt); }
+                            }
+
+                            Text {
+                                text: kind-opt == "default" ? "Padrão" : kind-opt == "custom" ? "Personalizado" : "Fixo";
+                                font-size:          12px;
+                                color:              root.card-preview.kind == kind-opt ? Palette.accent : Palette.text-muted;
+                                horizontal-alignment: center;
+                                vertical-alignment:   center;
+                            }
+                        }
+                    }
+
+                    if root.narrow : VerticalLayout {
+                        spacing: 6px;
+
+                        for kind-opt in ["default", "custom", "fixed"] : Rectangle {
+                            width:         100%;
+                            height:        36px;
+                            border-radius: 5px;
+                            border-width:  1px;
+                            border-color:  root.card-preview.kind == kind-opt ? Palette.accent : Palette.border;
+                            background:    root.card-preview.kind == kind-opt ? Palette.bg-active : Palette.bg-input;
+                            animate background { duration: 120ms; }
+
+                            TouchArea {
+                                enabled: root.editable;
+                                clicked => { root.on-select-card-kind(kind-opt); }
+                            }
+
+                            Text {
+                                text: kind-opt == "default" ? "Padrão" : kind-opt == "custom" ? "Personalizado" : "Fixo";
+                                font-size:          12px;
+                                color:              root.card-preview.kind == kind-opt ? Palette.accent : Palette.text-muted;
+                                horizontal-alignment: center;
+                                vertical-alignment:   center;
+                            }
+                        }
+                    }
+
+                    if root.card-preview.kind == "fixed" : LabeledInput {
+                        label:       "Valor fixo";
+                        placeholder: "ex: - ou @ ou _";
+                        value <=> seq-row.card-fixed-value;
+                    }
+
+                    if root.card-preview.kind == "default" || root.card-preview.kind == "custom" : VerticalLayout {
+                        spacing: 8px;
+
+                        HorizontalLayout {
+                            spacing: 12px;
+                            Text { text: "Entropia: " + root.card-preview-total-entropy-bits + " bits"; font-size: 11px; color: Palette.text-muted; }
+                            Text { text: "Código: " + root.card-preview.code; font-size: 11px; color: Palette.text-muted; }
+                        }
+
+                        LabeledInput {
+                            label: "Quantidade de posições";
+                            placeholder: "1";
+                            value <=> seq-row.card-quantity-text;
+                        }
+
+                        for cl in root.card-char-lists : CharListCheckbox {
+                            item:    cl;
+                            enabled: root.editable && root.card-preview.kind == "custom";
+                            toggled => { root.on-toggle-card-mask-list(cl.bit); }
+                        }
+                    }
+
+                    if root.card-preview-ready : VerticalLayout {
+                        padding-bottom: 6px;
+
+                        Text {
+                            text:      "Arraste o card/conjunto abaixo para a linha de posições acima, para adicionar.";
+                            font-size: 11px;
+                            color:     Palette.text-muted;
+                            wrap:      word-wrap;
+                        }
+                    }
+
+                    if root.card-preview-ready : VerticalLayout {
+                        alignment: start;
+                        spacing:   4px;
+
+                        preview-ta := TouchArea {
+                            enabled: root.editable;
+                            moved => {
+                                if self.pressed && !seq-row.dragging {
+                                    seq-row.dragging  = true;
+                                    seq-row.drag-kind = "create";
+                                }
+                                if seq-row.drag-kind == "create" {
+                                    seq-row.drag-x = (self.absolute-position.x + self.mouse-x - seq-row.content-abs-x - seq-row.content-viewport-x) / 1px;
+                                    seq-row.drag-y = (self.absolute-position.y + self.mouse-y - seq-row.absolute-position.y) / 1px;
+                                    root.on-drag-move(seq-row.drag-x);
+                                }
+                            }
+                            pointer-event(event) => {
+                                if event.kind == PointerEventKind.up && seq-row.drag-kind == "create" {
+                                    if seq-row.drag-target-gap >= 0 {
+                                        root.on-insert-positions(
+                                            seq-row.drag-target-gap,
+                                            root.card-preview.kind,
+                                            seq-row.card-fixed-value,
+                                            root.card-preview.kind == "fixed" ? 1 : seq-row.card-quantity-text.to-float(),
+                                        );
+                                    }
+                                    seq-row.dragging  = false;
+                                    seq-row.drag-kind = "";
+                                }
+                            }
+
+                            Rectangle {
+                                width:  root.card-preview-width;
+                                height: 44px;
+                                border-radius: 8px;
+                                border-width: 2px;
+                                border-color: Palette.accent;
+                                background: root.card-preview.kind == "fixed" ? #ffffff : root.card-preview.kind == "default" ? #4b5263 : #1a2e40;
+                                opacity: (seq-row.dragging && seq-row.drag-kind == "create") ? 0.5 : 0.9;
+
+                                Text {
+                                    text: root.card-preview-text;
+                                    font-size:   13px;
+                                    font-weight: 700;
+                                    color:       root.card-preview.kind == "fixed" ? #1a1a1a : Palette.text-heading;
+                                    horizontal-alignment: center;
+                                    vertical-alignment:   center;
+                                    overflow: elide;
+                                    width: 100%;
+                                    height: 100%;
+                                }
+                            }
+                        }
+                    }
+
+                    HorizontalLayout {
+                        alignment: end;
+                        spacing: 8px;
+
+                        Button {
+                            text: "Fechar";
+                            enabled: root.card-preview.kind != "";
+                            clicked => { root.on-clear-card-config(); }
+                        }
+                    }
+
+                    MessageBanner {
+                        message: root.error-sequence;
+                        variant: "error";
+                    }
+                }
+            }
+        }
+    }
+
+    HorizontalLayout {
+        alignment: end;
+
+        Button {
+            text:    "Limpar sequência atual";
+            enabled: root.editable && root.restriction.sequence-len > 0;
+            clicked => { root.on-clear-sequence(); }
+        }
+    }
+
+    Rectangle {
+        background:    Palette.bg-panel;
+        border-radius: 8px;
+        border-width:  1px;
+        border-color:  Palette.border;
+
+        VerticalLayout {
+            padding: 16px;
+            spacing: 12px;
+
+            HorizontalLayout {
+                spacing:   8px;
+                alignment: start;
+
+                Text {
+                    text:               "Listas de caracteres";
+                    font-size:          13px;
+                    font-weight:        700;
+                    color:              Palette.text-muted;
+                    horizontal-stretch: 1;
+                    vertical-alignment: center;
+                }
+
+                add-cl-btn := Rectangle {
+                    width:         32px;
+                    height:        32px;
+                    border-radius: 5px;
+                    border-width:  1px;
+                    border-color:  show-add-charlist-form ? Palette.accent : Palette.border;
+                    background:    show-add-charlist-form ? Palette.bg-active : Palette.bg-input;
+                    animate background { duration: 120ms; }
+
+                    add-cl-ta := TouchArea {
+                        enabled: root.editable;
+                        clicked => { root.show-add-charlist-form = !root.show-add-charlist-form; }
+                    }
+
+                    Text {
+                        text:               "+";
+                        font-size:          16px;
+                        font-weight:        700;
+                        color:              show-add-charlist-form ? Palette.accent : Palette.text-muted;
+                        horizontal-alignment: center;
+                        vertical-alignment:   center;
+                        width:              100%;
+                        height:             100%;
+                        animate color { duration: 120ms; }
+                    }
+                }
+            }
+
+            Divider {}
+
+            if show-add-charlist-form : Rectangle {
+                background:    Palette.bg-base;
+                border-radius: 6px;
+                border-width:  1px;
+                border-color:  Palette.accent;
+
+                VerticalLayout {
+                    padding: 12px;
+                    spacing: 10px;
+
+                    Text {
+                        text:        "Adicionar lista de caracteres";
+                        font-size:   13px;
+                        font-weight: 700;
+                        color:       Palette.text-heading;
+                    }
+
+                    cl-name := LabeledInput {
+                        label:       "Nome";
+                        placeholder: "ex: Sílabas";
+                        hint:        "O slot é atribuído automaticamente ao próximo livre";
+                    }
+
+                    cl-elements := LabeledInput {
+                        label:       "Elementos (separados por vírgula)";
+                        placeholder: "a,b,c,d,e,f,...";
+                        hint:        "Cada elemento é uma opção possível para este slot";
+                    }
+
+                    VerticalLayout {
+                        spacing: 4px;
+
+                        Text {
+                            text:      "Adicionar carácter especial (aceita qualquer carácter, incl. espaço/vírgula):";
+                            font-size: 11px;
+                            color:     Palette.text-muted;
+                            wrap:      word-wrap;
+                        }
+
+                        if !root.narrow : HorizontalLayout {
+                            spacing: 6px;
+
+                            LineEdit {
+                                horizontal-stretch: 1;
+                                text <=> root.new-charlist-special-char;
+                            }
+
+                            Button {
+                                text:    "Adicionar";
+                                enabled: root.new-charlist-special-char != "";
+                                clicked => {
+                                    cl-elements.value = cl-elements.value + (cl-elements.value == "" ? "" : ", ") + "{" + root.new-charlist-special-char + "}";
+                                    root.new-charlist-special-char = "";
+                                }
+                            }
+                        }
+
+                        if root.narrow : VerticalLayout {
+                            spacing: 6px;
+
+                            LineEdit {
+                                width: 100%;
+                                text <=> root.new-charlist-special-char;
+                            }
+
+                            Button {
+                                text:    "Adicionar";
+                                width:   100%;
+                                enabled: root.new-charlist-special-char != "";
+                                clicked => {
+                                    cl-elements.value = cl-elements.value + (cl-elements.value == "" ? "" : ", ") + "{" + root.new-charlist-special-char + "}";
+                                    root.new-charlist-special-char = "";
+                                }
+                            }
+                        }
+                    }
+
+                    MessageBanner {
+                        message: root.error-charlist;
+                        variant: "error";
+                    }
+
+                    HorizontalLayout {
+                        alignment: end;
+                        spacing:   8px;
+
+                        Button {
+                            text: "Cancelar";
+                            clicked => { root.show-add-charlist-form = false; }
+                        }
+
+                        Button {
+                            text:    "Adicionar lista";
+                            primary: true;
+                            enabled: cl-name.value != "" && cl-elements.value != "";
+                            clicked => {
+                                root.on-add-charlist(
+                                    cl-name.value,
+                                    cl-elements.value,
+                                );
+                                root.show-add-charlist-form = false;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if char-lists.length == 0 : Text {
+                text:      "(nenhuma lista definida)";
+                font-size: 12px;
+                color:     Palette.text-muted;
+            }
+
+            for cl[i] in char-lists : CharListRow {
+                item:            cl;
+                actions-enabled: root.editable;
+
+                on-save-elements(csv) => {
+                    root.on-edit-charlist-elements(cl.uuid, csv);
+                }
+                on-remove => {
+                    root.on-remove-charlist(cl.uuid);
+                }
+            }
+        }
+    }
+
+    // Formulário: renomear
+    if show-rename-form : Rectangle {
+        background:    Palette.bg-panel;
+        border-radius: 8px;
+        border-width:  1px;
+        border-color:  Palette.border;
+
+        VerticalLayout {
+            padding: 16px;
+            spacing: 12px;
+
+            Text {
+                text:        "Renomear restrição";
+                font-size:   14px;
+                font-weight: 700;
+                color:       Palette.text-heading;
+            }
+
+            rename-f := LabeledInput {
+                label:       "Novo nome";
+                placeholder: restriction.name;
+                has-error:   error-rename != "";
+                hint:        error-rename != "" ? error-rename : "";
+            }
+
+            HorizontalLayout {
+                alignment: end;
+                spacing:   8px;
+
+                Button {
+                    text:    "Cancelar";
+                    clicked => { root.show-rename-form = false; }
+                }
+
+                Button {
+                    text:    "Guardar";
+                    primary: true;
+                    enabled: rename-f.value != "";
+                    clicked => { root.on-rename(rename-f.value); }
+                }
+            }
+        }
+    }
+
+    // Zona de acções
+    Rectangle {
+        background:    Palette.bg-panel;
+        border-radius: 8px;
+        border-width:  1px;
+        border-color:  Palette.border;
+
+        VerticalLayout {
+            padding: 16px;
+            spacing: 8px;
+
+            Text {
+                text:        "Acções";
+                font-size:   13px;
+                font-weight: 700;
+                color:       Palette.text-muted;
+            }
+
+            Divider {}
+
+            HorizontalLayout {
+                spacing: 8px;
+
+                Button {
+                    text:               "Renomear";
+                    horizontal-stretch: 1;
+                    enabled:            root.editable;
+                    clicked => {
+                        root.show-rename-form = !root.show-rename-form;
+                    }
+                }
+            }
+        }
+    }
+
+    Rectangle {
+        background:    #2e1a1a;
+        border-radius: 6px;
+        border-width:  1px;
+        border-color:  Palette.danger;
+
+        VerticalLayout {
+        if !root.very-narrow : HorizontalLayout {
+            padding:   12px;
+            spacing:   12px;
+            alignment: start;
+
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: 2px;
+
+                Text {
+                    text:      "Remover restrição";
+                    font-size: 13px;
+                    color:     Palette.danger;
+                    font-weight: 700;
+                }
+
+                Text {
+                    text:      "Remove esta restrição e todos os domínios associados. Irreversível.";
+                    font-size: 11px;
+                    color:     Palette.text-muted;
+                    wrap:      word-wrap;
+                }
+            }
+
+            Button {
+                text:    "Remover";
+                enabled: root.editable;
+                clicked => { root.on-remove(); }
+            }
+        }
+
+        if root.very-narrow : VerticalLayout {
+            padding: 12px;
+            spacing: 10px;
+
+            Text {
+                text:      "Remover restrição";
+                font-size: 13px;
+                color:     Palette.danger;
+                font-weight: 700;
+            }
+
+            Text {
+                text:      "Remove esta restrição e todos os domínios associados. Irreversível.";
+                font-size: 11px;
+                color:     Palette.text-muted;
+                wrap:      word-wrap;
+            }
+
+            Button {
+                text:    "Remover";
+                width:   100%;
+                enabled: root.editable;
+                clicked => { root.on-remove(); }
+            }
+        }
+        }
+    }
+}
+
+component RestrictionFormatModal inherits FullscreenModalBase {
+    in property <bool> is-replace: false;
+
+    callback on-generate();
+    callback on-cancel();
+
+    card-max-width: 420px;
+    overlay-color:  #00000099;
+    card-background: #282c34;
+    close-on-outside-click: false;
+
+    VerticalLayout {
+        spacing: 16px;
+
+        Text {
+            text: root.is-replace ? "Gerar novo formato" : "Defina o formato desta restrição";
+            font-size:   16px;
+            font-weight: 700;
+            color:       Palette.text-heading;
+        }
+
+        Text {
+            text: root.is-replace ? "Isto substitui o formato actual por posições \"Padrão\" (código 0) suficientes para atingir ~96 bits de entropia, usando o padrão actualmente definido em \"Formato Padrão\". As senhas derivadas mudam." : "Uma restrição sem formato nunca pode ter domínios. Gere posições \"Padrão\" (código 0) suficientes para ~96 bits de entropia, usando o padrão definido em \"Formato Padrão\" - pode personalizá-lo depois nesta vista.";
+            font-size: 13px;
+            color:     Palette.text-muted;
+            wrap:      word-wrap;
+        }
+
+        HorizontalLayout {
+            alignment: end;
+            spacing:   10px;
+
+            Button {
+                text:    "Cancelar";
+                clicked => { root.on-cancel(); }
+            }
+            Button {
+                text:    "Gerar formato padrão";
+                primary: true;
+                clicked => { root.on-generate(); }
+            }
+        }
+    }
+}
+
+export component RestrictionsView inherits Rectangle {
+    width:      100%;
+    height:     100%;
+    background: Palette.bg-base;
+
+    in property <string>             device-uuid;
+    in property <string>             device-name;
+    in property <[RestrictionItem]>  restrictions:    [];
+    in property <int>                selected-index:  -1;
+    in property <RestrictionItem>    selected-restriction;
+    in property <[SequenceItem]>     sequence:        [];
+    in property <[CharListItem]>     char-lists:      [];
+    in property <[CharListItem]>     card-char-lists: [];
+    in property <[CharListItem]>     position-char-lists: [];
+    in property <PositionDetail>     position-detail;
+    in property <SequenceItem>       card-preview;
+    in property <int>                sequence-end-x;
+    in property <int>                drag-target-gap: -1;
+    in property <bool>               drag-over-trash: false;
+
+    in property <string> error-add:          "";
+    in property <string> error-rename:       "";
+    in property <string> error-sequence:     "";
+    in property <string> error-charlist:     "";
+
+    in-out property <bool> show-add-form: false;
+
+    in-out property <bool>   show-format-modal:     false;
+    in-out property <string> format-modal-uuid:     "";
+    in-out property <bool>   format-modal-replace:  false;
+
+    in-out property <bool>   show-example:          false;
+    in property <string>     example-password:      "";
+    in property <string>     example-entropy:       "";
+    in property <int>        example-length:        0;
+
+    in property <length> avail-width: 1000px;
+    property <bool> narrow: root.avail-width < Tokens.mobile-breakpoint;
+
+    callback on-select(string /*uuid*/);
+    callback on-add(string /*name*/);
+    callback on-rename(string /*uuid*/, string /*name*/);
+    callback on-toggle-list(int /*bit*/);
+    callback on-reset-default();
+    callback on-set-default-mask();
+    callback on-select-card-kind(string);
+    callback on-toggle-card-mask-list(int);
+    callback on-clear-card-config();
+    callback on-clear-sequence(string /*uuid*/);
+    callback on-drag-move(int);
+    callback on-reorder-position(int, int);
+    callback on-insert-positions(int, string, string, int);
+    callback on-extend-entropy(string /*uuid*/, string /*bits*/);
+    callback on-remove-sequence-item(string /*uuid*/, int /*index*/);
+    callback on-view-position(int);
+    callback on-close-position-detail();
+    callback on-remove-viewed-position();
+    callback on-toggle-position-mask-list(int /*bit*/);
+    callback on-add-charlist(string /*uuid*/, string /*name*/, string /*elements_csv*/);
+    callback on-edit-charlist-elements(string /*restriction_uuid*/, string /*charlist_uuid*/, string /*elements_csv*/);
+    callback on-remove-charlist(string /*restriction_uuid*/, string /*charlist_uuid*/);
+    callback on-remove-request(string /*uuid*/);
+    callback on-go-domains(string /*restriction_uuid*/);
+    callback on-generate-default-format(string /*uuid*/);
+    callback on-view-example(string /*uuid*/);
+    callback on-back();
+    pure callback compute-lines(string /*texto*/, int /*chars-por-linha*/) -> [TextLine];
+
+    columns := HorizontalLayout {
+    spacing: 0px;
+
+    restr-sidebar := SidebarBase {
+        avail-width: root.avail-width;
+        flush:       true;
+
+        if !restr-sidebar.narrow || !restr-sidebar.minimized : VerticalLayout {
+            spacing: 0px;
+
+            ListHeader {
+                title:       "Restrições";
+                subtitle:    device-name;
+                add-active:  show-add-form;
+                show-toggle: root.narrow;
+                toggle-open: true;
+                toggle => { restr-sidebar.minimized = true; }
+                back   => { root.on-back(); }
+                add    => {
+                    root.show-add-form = !root.show-add-form;
+                    if root.show-add-form { root.on-select(""); }
+                    restr-sidebar.minimized = true;
+                }
+            }
+
+            ScrollView {
+                vertical-stretch:   1;
+                horizontal-stretch: 1;
+
+                VerticalLayout {
+                    padding: 6px;
+                    spacing: 2px;
+
+                    if restrictions.length == 0 : EmptyState {
+                        title:   "Sem restrições";
+                        message: "Clique em + para adicionar.";
+                    }
+
+                    for r[i] in restrictions : RestrictionListItem {
+                        name:          r.name;
+                        format-visual: r.format-visual;
+                        domain-count:  r.domain-count;
+                        selected:      i == selected-index;
+                        clicked => {
+                            root.show-add-form = false;
+                            root.on-select(r.uuid);
+                            restr-sidebar.minimized = true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    content-scroll := ScrollView {
+        horizontal-stretch: 1;
+        vertical-stretch:   1;
+        min-width:          0px;
+
+        VerticalLayout {
+            alignment: start;
+            width:     content-scroll.width;
+            min-width: 0px;
+            if show-add-form : AddRestrictionForm {
+                error:     root.error-add;
+                on-submit(name) => { root.on-add(name); }
+                on-cancel       => { root.show-add-form = false; }
+            }
+
+            if !show-add-form && selected-index >= 0 : detail-panel := RestrictionDetailPanel {
+                restriction:      root.selected-restriction;
+                sequence:         root.sequence;
+                char-lists:       root.char-lists;
+                card-char-lists:  root.card-char-lists;
+                position-char-lists: root.position-char-lists;
+                position-detail:  root.position-detail;
+                card-preview:     root.card-preview;
+                sequence-end-x:   root.sequence-end-x;
+                drag-target-gap:  root.drag-target-gap;
+                drag-over-trash:  root.drag-over-trash;
+                error-rename:     root.error-rename;
+                error-sequence:   root.error-sequence;
+                error-charlist:   root.error-charlist;
+                scroll-abs-y:           content-scroll.absolute-position.y;
+                scroll-height:          content-scroll.height;
+                scroll-viewport-y    <=> content-scroll.viewport-y;
+                scroll-viewport-height: content-scroll.viewport-height;
+
+                go-to-domains => { root.on-go-domains(root.selected-restriction.uuid); }
+
+                on-rename(name)              => { root.on-rename(root.selected-restriction.uuid, name); }
+                on-toggle-list(b)            => { root.on-toggle-list(b); }
+                on-reset-default             => { root.on-reset-default(); }
+                on-set-default-mask          => { root.on-set-default-mask(); }
+                on-select-card-kind(k)       => { root.on-select-card-kind(k); }
+                on-toggle-card-mask-list(b)  => { root.on-toggle-card-mask-list(b); }
+                on-clear-card-config         => { root.on-clear-card-config(); }
+                on-clear-sequence            => { root.on-clear-sequence(root.selected-restriction.uuid); }
+                on-drag-move(x)              => { root.on-drag-move(x); }
+                on-reorder-position(s, t)    => { root.on-reorder-position(s, t); }
+                on-insert-positions(t, k, l, q) => { root.on-insert-positions(t, k, l, q); }
+                on-extend-entropy(bits)      => { root.on-extend-entropy(root.selected-restriction.uuid, bits); }
+                on-remove-sequence-item(i)   => { root.on-remove-sequence-item(root.selected-restriction.uuid, i); }
+                on-view-position(i)          => { root.on-view-position(i); }
+                on-close-position-detail     => { root.on-close-position-detail(); }
+                on-remove-viewed-position    => { root.on-remove-viewed-position(); }
+                on-toggle-position-mask-list(bit) => { root.on-toggle-position-mask-list(bit); }
+                on-add-charlist(n, e)        => { root.on-add-charlist(root.selected-restriction.uuid, n, e); }
+                on-edit-charlist-elements(cl, e) => { root.on-edit-charlist-elements(root.selected-restriction.uuid, cl, e); }
+                on-remove-charlist(cl)       => { root.on-remove-charlist(root.selected-restriction.uuid, cl); }
+                on-generate-default-format => {
+                    root.format-modal-uuid    = root.selected-restriction.uuid;
+                    root.format-modal-replace = true;
+                    root.show-format-modal    = true;
+                }
+                on-view-example         => {
+                    root.show-add-form = false;
+                    root.on-view-example(root.selected-restriction.uuid);
+                }
+                on-remove               => { root.on-remove-request(root.selected-restriction.uuid); }
+            }
+
+            if !show-add-form && selected-index < 0 : EmptyState {
+                title:   "Selecione uma restrição";
+                message: "Escolha uma restrição na lista ou clique em + para criar uma nova.";
+            }
+        }
+    }
+    }
+
+    RestrictionFormatModal {
+        show:               root.show-format-modal;
+        is-replace:         root.format-modal-replace;
+        overlay-extend-top: Tokens.header-height;
+
+        on-cancel   => { root.show-format-modal = false; }
+        on-generate => {
+            root.on-generate-default-format(root.format-modal-uuid);
+        }
+    }
+
+    FullscreenModalBase {
+        show:               root.show-example;
+        card-max-width:     420px;
+        overlay-color:      #00000099;
+        card-background:    #282c34;
+        overlay-extend-top: Tokens.header-height;
+
+        closed => { root.show-example = false; }
+
+        VerticalLayout {
+            spacing: 16px;
+
+            HorizontalLayout {
+                spacing: 8px;
+
+                Text {
+                    text:        "Exemplo de senha";
+                    font-size:   16px;
+                    font-weight: 700;
+                    color:       Palette.text-heading;
+                    horizontal-stretch: 1;
+                    vertical-alignment: center;
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 28px; height: 28px;
+                        border-radius: 5px;
+                        background: close-example-ta.has-hover ? Palette.bg-hover : transparent;
+                        close-example-ta := TouchArea {
+                            clicked => { root.show-example = false; }
+                        }
+                        IconClose {
+                            x: (parent.width  - self.width)  / 2;
+                            y: (parent.height - self.height) / 2;
+                            size: 12px;
+                        }
+                    }
+                }
+            }
+
+            StatusBadge {
+                label:   "Exemplo (não é uma senha real)";
+                variant: "info";
+            }
+
+            Text {
+                text: "Gerado com bits fixos (1010...), não com a seed real - serve só para mostrar o aspecto do formato actual.";
+                font-size: 11px;
+                color:     Palette.text-muted;
+                wrap:      word-wrap;
+            }
+
+            Rectangle {
+                background:    Palette.bg-base;
+                border-radius: 6px;
+                border-width:  1px;
+                border-color:  Palette.border;
+
+                HorizontalLayout {
+                    padding: 14px;
+                    MixedFontText {
+                        raw-text:           root.example-password;
+                        font-size:          14px;
+                        font-weight:        700;
+                        color:              Palette.text-heading;
+                        horizontal-stretch: 1;
+                        compute-lines(text, limit) => { root.compute-lines(text, limit) }
+                    }
+                }
+            }
+
+            KeyValueRow { label: "Entropia"; value: root.example-entropy + " bits"; }
+            KeyValueRow { label: "Comprimento"; value: root.example-length + " caracteres"; }
+        }
+    }
+}

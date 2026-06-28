@@ -1,0 +1,11 @@
+#!/usr/bin/env sh
+set -eu
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+
+if command -v gradle >/dev/null 2>&1; then
+    exec gradle -p "$SCRIPT_DIR" "$@"
+fi
+
+echo "gradle is required to build the Android APK scaffold." >&2
+exit 1

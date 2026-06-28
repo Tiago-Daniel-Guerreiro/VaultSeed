@@ -1,0 +1,16 @@
+[package]
+name = "vaultseed-slint"
+version = "0.5.4"
+edition = "2021"
+
+[lib]
+crate-type = ["rlib"]
+
+[features]
+android = ["slint/backend-android-activity-06"]
+
+[dependencies]
+slint = "1.16.1"
+
+[build-dependencies]
+slint-build = "1.16.1"

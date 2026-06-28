@@ -1,0 +1,48 @@
+[package]
+name = "vaultseed-gui"
+version = "0.5.4"
+edition = "2021"
+
+[lib]
+crate-type = ["rlib"]
+
+[features]
+android = ["vaultseed-slint/android"]
+clipboard = ["arboard"]
+desktop = []
+
+[dependencies]
+vaultseed-core  = { path = "../Core" }
+vaultseed-slint = { path = "../Slint" }
+
+slint             = "1.16.1"
+uuid              = { version = "1.23.2", features = ["v4", "serde"] }
+chrono            = { version = "0.4.44", features = ["serde", "wasmbind"] }
+hex               = "0.4.3"
+serde_json        = "1.0.150"
+web-time          = "1.1.0" # std::time::Instant entra em panic em  wasm32-unknown-unknown.
+ 
+# Desktop file dialogs (Windows, macOS, Linux)
+[target.'cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))'.dependencies]
+rfd               = "0.17.2"
+
+# Android - JNI para fullscreen imersivo e seleção de ficheiros (SAF)
+[target.'cfg(target_os = "android")'.dependencies]
+jni               = "0.21"
+
+# Clipboard - desktop nativo apenas (não wasm, não android, não ios; arboard não suporta iOS)
+[target.'cfg(not(any(target_arch = "wasm32", target_os = "android", target_os = "ios")))'.dependencies]
+arboard           = { version = "3.6.1", optional = true }
+
+# WASM - seletor de ficheiro
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen      = "0.2"
+js-sys            = "0.3"
+web-sys           = { version = "0.3", features = [
+    "Window", "Document", "Node", "Element", "HtmlElement", "HtmlInputElement",
+    "CssStyleDeclaration", "FileList", "File", "FileReader", "Blob",
+] }
+
+# Clipboard iOS - groundwork não testado (UIPasteboard via Objective-C).
+[target.'cfg(target_os = "ios")'.dependencies]
+objc              = "0.2"

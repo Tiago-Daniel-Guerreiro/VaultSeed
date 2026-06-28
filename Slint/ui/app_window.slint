@@ -1,0 +1,1352 @@
+﻿// Componente raiz da aplicação. Define layout, navegação e camada de modais.
+
+import { Button, LineEdit, ScrollView, CheckBox } from "std-widgets.slint";
+
+// Fontes Unicode embebidas - NotoSans permite texto/acentos/símbolos;
+import "../../assets/fonts/NotoSans-Regular.ttf";
+import "../../assets/fonts/NotoEmoji-Regular.ttf";
+
+import {
+    Palette,
+    WindowMetrics,
+    Divider,
+    LabeledInput,
+    MessageBanner,
+    ToastNotification,
+    LoadingOverlay,
+    ConfirmDialog,
+    CalibrationModal,
+    EmptyState,
+    Card,
+    SectionTitle,
+    StatusBadge,
+    KeyValueRow,
+    BackButton,
+    SidebarToggle,
+    Tokens,
+    IconGear,
+    IconMore,
+    TextLine,
+} from "components/shared_components.slint";
+
+// Re-exportado explicitamente (não só importado) para o Slint gerar o binding Rust do global, usado em Gui/src/lib.rs via ui.global::<crate::ui::ClipboardActions>().
+export { ClipboardActions } from "components/shared_components.slint";
+
+import { HeaderMenuToggle, SidebarGroupLabel, SidebarNavItem } from "components/sidebar_components.slint";
+
+import { TutorialModal } from "components/tutorial_modal.slint";
+import { LoginView, AuthenticationModal } from "views/login_view.slint";
+import { DeviceItem, DevicesView } from "views/devices_view.slint";
+import {
+    DomainItem,
+    PasswordResultItem,
+    CompromisedVersionItem,
+    FrozenDetailItem,
+    RestrictionChoiceItem,
+    DomainsView,
+} from "views/domains_view.slint";
+import { NodeType, TreeNodeItem, ExportSummaryItem, ExportView } from "views/export_view.slint";
+import { RestrictionItem, SequenceItem, CharListItem, PositionDetail, RestrictionsView } from "views/restrictions_view.slint";
+import { SessionOverviewItem, CalibrationResultItem, SessionView } from "views/session_view.slint";
+import { LocalStateItem, SettingsView } from "views/settings_view.slint";
+import { FolderItem, StaticPasswordItem, StaticPasswordDetail, StaticPasswordsView } from "views/static_passwords_view.slint";
+import { CalibrationBenchmarkResult, ExportBenchmarkResult, BenchmarkView } from "views/benchmark_view.slint";
+import { SearchResultItem, SearchView } from "views/search_view.slint";
+
+// APP WINDOW - componente raiz (Layout principal pós-unlock usa um cabeçalho com menu colapsável,
+export component AppWindow inherits Window {
+    title:      "VaultSeed";
+    icon:       @image-url("../../assets/icons/Icon-window.png");
+    default-font-family: "Noto Sans";
+
+    // Dimensões flexíveis: inicial confortável e mínimos baixos para ecrãs pequenos.
+    min-width:        320px;
+    min-height:       480px;
+    preferred-width:  1100px;
+    preferred-height: 720px;
+    background: Palette.bg-base;
+
+    // Largura real da janela, partilhada via global para breakpoints responsivos em componentes dentro de ScrollView/Flickable.
+    changed width => { WindowMetrics.avail-width = root.width; }
+
+    // Autenticação
+    in-out property <bool>   is-unlocked:          false;
+    in-out property <int>    active-view:           0;
+    // 0 = Dispositivos | 1 = Sessão | 2 = Configurações | 3 = Benchmark
+
+    // Menu principal colapsável (cabeçalho do layout pós-unlock)
+    in-out property <bool>   main-menu-open:        false;
+
+    // Versão da app (CARGO_PKG_VERSION, definida uma vez a partir do Rust)
+    in property <string>  app-version: "";
+
+    // Ecrã de login 
+    in property <string>  login-default-path:    "session.vaultseed";
+    in property <string>  login-error:           "";
+    in property <bool>    login-hmac-warning:    false;
+    in property <bool>    login-hmac-tampered:   false;
+    in property <bool>    login-hardware-enabled: false;
+    // Vista activa antes do login: 0 = Login | 2 = Configurações | 3 = Benchmark
+    in-out property <int> login-view:            0;
+
+    // Tutorial
+    in-out property <bool>   show-tutorial:         false;
+    in-out property <int>    tutorial-step:         0;
+    in property <string>  tutorial-default-path: "session.vaultseed";
+    in property <string>  tutorial-default-device: "Meu_Pc";
+    in property <string>  tutorial-error:        "";
+    in property <string>  tutorial-password:     "";
+    in property <string>  tutorial-step1-file-warning: "";
+    in property <bool>    tutorial-loading:      false;
+    in property <string>  tutorial-loading-msg:  "A processar...";
+
+    // Passo 5 - Argon2id
+    in-out property <string> tutorial-device-m:           "65536";
+    in-out property <string> tutorial-device-t:           "3";
+    in-out property <string> tutorial-device-p:           "1";
+    in-out property <string> tutorial-device-time-ms:     "";
+    in property <bool>       tutorial-device-calibrating: false;
+
+    in-out property <string> tutorial-session-m:           "65536";
+    in-out property <string> tutorial-session-t:           "3";
+    in-out property <string> tutorial-session-p:           "1";
+    in-out property <string> tutorial-session-time-ms:     "";
+    in property <bool>       tutorial-session-calibrating: false;
+
+    // Toast 
+    in-out property <bool> toast-show:   false;
+    in property <string>  toast-message: "";
+    in property <string>  toast-variant: "info";
+
+    // Loading overlay 
+    in property <bool>    loading-show:    false;
+    in property <string>  loading-message: "A processar...";
+
+    // Confirm dialog 
+    in property <bool>    confirm-show:    false;
+    in property <string>  confirm-title:   "Confirmar";
+    in property <string>  confirm-message: "";
+    in property <string>  confirm-variant: "warning";
+    in property <string>  confirm-ok:      "Confirmar";
+    in property <string>  confirm-cancel:  "Cancelar";
+
+    // Estado partilhado pela GUI 
+    in-out property <int>    active-sub-view: 0;
+
+    in-out property <SessionOverviewItem> session-overview;
+    in-out property <string> session-default-path;
+    in-out property <int>    session-active-panel: 0;
+    in-out property <string> session-error-argon2;
+    in-out property <string> session-error-rotate;
+    in-out property <string> session-error-save;
+    in-out property <string> session-error-hardware;
+    in-out property <string> session-error-xor;
+    in-out property <string> session-success-xor;
+    in-out property <bool>   session-xor-a-loaded: false;
+    in-out property <bool>   session-xor-b-loaded: false;
+    in-out property <string> session-error-delete-session;
+    in-out property <bool>   session-show-calibration-result: false;
+    in-out property <CalibrationResultItem> session-calibration-result;
+    in-out property <bool>   session-calibration-modal-show: false;
+
+    in-out property <bool>   devices-show-calibration-result: false;
+    in-out property <CalibrationResultItem> devices-calibration-result;
+    in-out property <bool>   devices-calibration-modal-show: false;
+    in-out property <bool>   devices-calibration-running: false;
+    changed devices-show-calibration-result => { root.devices-calibration-running = false; }
+    in-out property <string> devices-pending-calibration-m: "";
+    in-out property <string> devices-pending-calibration-t: "";
+    in-out property <string> devices-pending-calibration-p: "";
+
+    // Calibração obrigatória antes de criar um dispositivo novo.
+    in-out property <bool>   devices-add-calibration-pending: false;
+    in-out property <int>    devices-add-calibration-seq:     0;
+    in-out property <string> devices-add-calibrated-m:        "";
+    in-out property <string> devices-add-calibrated-t:        "";
+    in-out property <string> devices-add-calibrated-p:        "";
+
+    in-out property <[DeviceItem]> devices: [];
+    in-out property <int>    devices-selected-index: -1;
+    in-out property <DeviceItem> devices-selected-device;
+    in-out property <bool>   devices-show-add-form: false;
+    in-out property <string> devices-default-argon2-m: "65536";
+    in-out property <string> devices-default-argon2-t: "3";
+    in-out property <string> devices-default-argon2-p: "4";
+    in-out property <string> devices-error-add;
+    in-out property <string> devices-error-rename;
+    in-out property <string> devices-error-argon2;
+    in-out property <string> devices-error-nonce;
+
+    in-out property <[DomainItem]> domains: [];
+    in-out property <int>    domains-selected-index: -1;
+    in-out property <string> domains-restriction-name;
+    in-out property <string> domains-device-name;
+    in-out property <string> domains-restriction-uuid;
+    in-out property <bool>   domains-restriction-has-format: true;
+    in-out property <DomainItem> domains-selected-domain;
+    in-out property <[CompromisedVersionItem]> domains-compromised-versions: [];
+    in-out property <[RestrictionChoiceItem]> domains-available-restrictions: [];
+    in-out property <int>    domains-selected-version-index: -1;
+    in-out property <bool>   domains-show-password-card: false;
+    in-out property <bool>   domains-password-visible: false;
+    in-out property <PasswordResultItem> domains-password-result;
+    in-out property <FrozenDetailItem> domains-frozen-detail;
+    in-out property <bool>   domains-show-add-form: false;
+    in-out property <string> domains-error-add;
+    in-out property <string> domains-error-generate;
+    in-out property <string> domains-error-compromise;
+    in-out property <string> domains-error-restriction;
+
+    in-out property <[RestrictionItem]> restrictions: [];
+    in-out property <int>    restrictions-selected-index: -1;
+    in-out property <string> restrictions-device-name;
+    in-out property <string> restrictions-device-uuid;
+    in-out property <RestrictionItem> restrictions-selected-restriction;
+    in-out property <[SequenceItem]> restrictions-sequence: [];
+    in-out property <[CharListItem]> restrictions-char-lists: [];
+    in-out property <[CharListItem]> restrictions-card-char-lists: [];
+    in-out property <[CharListItem]> restrictions-position-char-lists: [];
+    in-out property <PositionDetail> restrictions-position-detail;
+    in-out property <SequenceItem>   restrictions-card-preview;
+    in-out property <int>    restrictions-sequence-end-x: 0;
+    in-out property <int>    restrictions-drag-target-gap: -1;
+    in-out property <bool>   restrictions-drag-over-trash: false;
+    in-out property <bool>   restrictions-show-add-form: false;
+    in-out property <string> restrictions-error-add;
+    in-out property <string> restrictions-error-rename;
+    in-out property <string> restrictions-error-sequence;
+    in-out property <string> restrictions-error-charlist;
+    in-out property <bool>   restrictions-show-format-modal:    false;
+    in-out property <string> restrictions-format-modal-uuid:    "";
+    in-out property <bool>   restrictions-format-modal-replace: false;
+    in-out property <bool>   restrictions-show-example:         false;
+    in-out property <string> restrictions-example-password:     "";
+    // Quebra de linha de texto misto (emoji + normal) de acordo com a largura
+    pure callback compute-mixed-font-lines(string /*texto*/, int /*chars-por-linha*/) -> [TextLine];
+    in-out property <string> restrictions-example-entropy:      "";
+    in-out property <int>    restrictions-example-length:        0;
+
+    in-out property <[FolderItem]> static-folders: [];
+    in-out property <int>    static-selected-folder-index: -1;
+    in-out property <string> static-device-name;
+    in-out property <string> static-device-uuid;
+    in-out property <bool>   static-show-compromised-mode: false;
+    in-out property <[StaticPasswordItem]> static-passwords: [];
+    in-out property <int>    static-selected-pw-index: -1;
+    in-out property <StaticPasswordDetail> static-selected-detail;
+    in-out property <bool>   static-value-visible: false;
+    in-out property <bool>   static-notes-visible: false;
+    in-out property <bool>   static-show-add-form: false;
+    in-out property <bool>   static-show-folder-mgmt: false;
+    in-out property <string> static-error-add;
+    in-out property <string> static-error-decrypt;
+    in-out property <string> static-error-compromise;
+    in-out property <string> static-error-rename;
+    in-out property <string> static-error-remove;
+    in-out property <string> static-error-create-folder;
+
+    in-out property <[TreeNodeItem]> export-tree-nodes: [];
+    in-out property <ExportSummaryItem> export-summary;
+    in-out property <string> export-error;
+    in-out property <bool>   export-is-exporting: false;
+
+    in-out property <string> search-query;
+    in-out property <[SearchResultItem]> search-results: [];
+
+    in-out property <LocalStateItem> settings-state;
+    in-out property <string> settings-error-calibration;
+    in-out property <string> settings-error-argon2;
+    in-out property <string> settings-error-export;
+    in-out property <string> settings-error-local;
+    in-out property <string> settings-error-browser-storage;
+    in-out property <int>    settings-active-panel: 0;
+
+    // true só na build wasm (extensão/site)
+    in property <bool> is-wasm: false;
+
+    in-out property <int>    benchmark-active-panel: 0;
+    in-out property <string> benchmark-current-min-ms;
+    in-out property <string> benchmark-current-max-ms;
+    in-out property <string> benchmark-config-argon2-m;
+    in-out property <string> benchmark-config-argon2-t;
+    in-out property <string> benchmark-config-argon2-p;
+    in-out property <string> benchmark-config-devices;
+    in-out property <string> benchmark-config-domains;
+    in-out property <string> benchmark-config-static;
+    in-out property <string> benchmark-config-k1-len;
+    in-out property <string> benchmark-config-k2-len;
+    in-out property <bool>   benchmark-calibration-running: false;
+    in-out property <bool>   benchmark-calibration-has-result: false;
+    in-out property <CalibrationBenchmarkResult> benchmark-calibration-result;
+    in-out property <string> benchmark-error-calibration;
+    in-out property <bool>   benchmark-export-running: false;
+    in-out property <bool>   benchmark-export-has-result: false;
+    in-out property <ExportBenchmarkResult> benchmark-export-result;
+    in-out property <string> benchmark-error-export;
+
+    // CALLBACKS - UI -> Rust
+
+    // Login 
+    callback on-pre-unlock(string) -> bool;
+    // Caminho de sessão + K1 + K2 + k_ext opcional (hex string vazia se ausente) + xor shares (paths) when using XOR mode
+    callback on-login(
+        string, /*session_path*/
+        string, /*k1*/
+        string, /*k2*/
+        string, /*k_ext - vazio se hardware inativo*/
+        string, /*xor_path_a - vazio se modo manual*/
+        string  /*xor_path_b - vazio se modo manual*/
+    );
+    // Utilizador aceitou abrir sessão sem HMAC
+    callback on-login-confirm-no-hmac();
+    // Abrir tutorial em vez de carregar ficheiro
+    callback on-open-tutorial();
+    callback on-pick-path(string /*kind*/, string /*current*/) -> string;
+    // Seletor de ficheiros assíncrono (Android/SAF). Mas em desktop o on-pick-path é síncrono e devolve logo
+    in-out property <string> picked-path:  "";
+    in-out property <string> pick-target:  "";
+    in-out property <int>    pick-seq:      0;
+    // Ficheiros XOR no login lidos por bytes (browser, sem caminho de disco).
+    callback on-pick-xor-file-login(string /*which: "a"|"b"*/);
+    in-out property <bool> login-xor-a-loaded: false;
+    in-out property <bool> login-xor-b-loaded: false;
+    // Carrega o LocalState antes de mostrar as Configurações no login
+    callback on-prelogin-open-settings();
+
+    // Tutorial 
+    callback on-tutorial-cancel();
+    callback on-tutorial-step0-next();
+    callback on-tutorial-step1(string /*session_path*/, string /*device_name*/);
+    callback on-tutorial-step1-override();
+    callback on-tutorial-step1-acknowledge-warning();
+    callback on-tutorial-device-calibrate-auto();
+    callback on-tutorial-device-calibrate(string /*m*/, string /*t*/, string /*p*/);
+    callback on-tutorial-device-calibrate-next(string /*m*/, string /*t*/, string /*p*/);
+    callback on-tutorial-step2(string /*domain*/);
+    callback on-tutorial-session-calibrate-auto();
+    callback on-tutorial-session-calibrate(string /*m*/, string /*t*/, string /*p*/);
+    callback on-tutorial-session-calibrate-next(string /*m*/, string /*t*/, string /*p*/);
+    callback on-tutorial-step3(string /*k1*/, string /*k2*/);
+    callback on-tutorial-step4(string /*k1_confirm*/, string /*k2_confirm*/);
+    callback on-tutorial-step7-verify(string /*k1*/, string /*k2*/);
+    callback on-tutorial-step7-restart();
+    callback on-tutorial-finish(string /*k1*/, string /*k2*/);
+
+    // Confirm dialog 
+    callback on-confirm-ok();
+    callback on-confirm-cancel();
+
+    // Navegação / ciclo de vida 
+    callback on-lock();   // Fechar sessão e voltar ao login
+    // Bloqueia sem voltar a verificar alterações por guardar (chamado a partir do diálogo "Alterações não guardadas" - evita reabrir o mesmo diálogo em loop).
+    callback on-lock-force();
+// Termina a aplicação - usado quando o diálogo de alterações por guardar foi aberto por uma tentativa de fechar a janela
+    callback on-quit-force();
+    callback on-open-save-panel();   // Atalho de guardar sessão (Sidebar)
+
+    // Sessão 
+    callback on-save(string, string, string, string, string, string, bool);
+    callback on-calibrate(string);
+    callback on-apply-calibration();
+    callback on-apply-manual-argon2(string, string, string);
+    callback on-regenerate-salt();
+    callback on-activate-hardware(string, string, string, string, string);
+    callback on-deactivate-hardware(string, string, string);
+    callback on-create-xor(string, string, string, string);
+    callback on-verify-xor(string, string);
+    callback on-verify-xor-loaded();
+    callback on-pick-xor-file(string /*which: "a"|"b"*/);
+    callback on-delete-session-file();
+    callback on-rotate-keys(string, string, string, string, string, string, string);
+
+    // Dispositivos 
+    callback on-devices-select(string);
+    callback on-devices-add(string, string, string, string, string, string, string, string, string);
+    callback on-devices-rename(string, string);
+    callback on-devices-edit-argon2(string, string, string, string, string, string);
+    callback on-devices-edit-nonce(string, string, string, string);
+    callback on-devices-regenerate-salt(string, string, string);
+    callback on-devices-remove-request(string);
+    callback on-devices-go-restrictions(string);
+    callback on-devices-go-static-passwords(string);
+    callback on-devices-calibrate-run();
+
+    // Domínios 
+    callback on-domains-select(string);
+    callback on-domains-add(string);
+    callback on-domains-view-password(string, string, string);
+    callback on-domains-copy-password(string, string, string);
+    callback on-domains-compromise(string, string, string);
+    callback on-domains-change-restriction(string, string);
+    callback on-domains-select-version(string, string);
+    callback on-domains-view-frozen(string, string, string, string);
+    callback on-domains-copy-frozen(string, string, string, string);
+    callback on-domains-delete-frozen(string, string);
+    callback on-domains-remove-request(string);
+    callback on-domains-close-password();
+    callback on-domains-back();
+
+    // Restrições
+    callback on-restrictions-select(string);
+    callback on-restrictions-add(string);
+    callback on-restrictions-rename(string, string);
+    callback on-restrictions-toggle-mask-list(int);
+    callback on-restrictions-reset-mask-default();
+    callback on-restrictions-set-default-mask();
+    callback on-restrictions-select-card-kind(string);
+    callback on-restrictions-toggle-card-mask-list(int);
+    callback on-restrictions-clear-card-config();
+    callback on-restrictions-clear-sequence(string);
+    callback on-restrictions-drag-move(int);
+    callback on-restrictions-reorder-position(int, int);
+    callback on-restrictions-insert-positions(int, string, string, int);
+    callback on-restrictions-remove-sequence-item(string, int);
+    callback on-restrictions-extend-entropy(string, string);
+    callback on-restrictions-view-position(int);
+    callback on-restrictions-close-position-detail();
+    callback on-restrictions-remove-viewed-position();
+    callback on-restrictions-toggle-position-mask-list(int);
+    callback on-restrictions-add-charlist(string, string, string);
+    callback on-restrictions-edit-charlist-elements(string, string, string);
+    callback on-restrictions-remove-charlist(string, string);
+    callback on-restrictions-remove-request(string);
+    callback on-restrictions-go-domains(string);
+    callback on-restrictions-generate-default-format(string);
+    callback on-restrictions-view-example(string);
+    callback on-restrictions-back();
+
+    // Senhas estáticas 
+    callback on-static-select-folder(string, bool);
+    callback on-static-select-password(string);
+    callback on-static-add(string, string, string, string, string);
+    callback on-static-view(string, string, string);
+    callback on-static-view-notes(string, string, string);
+    callback on-static-copy(string, string, string);
+    callback on-static-mark-compromised(string, string, string);
+    callback on-static-close-value();
+    callback on-static-close-notes();
+    callback on-static-remove-request(string);
+    callback on-static-rename(string, string, string, string);
+    callback on-static-edit-notes(string, string, string, string);
+    callback on-static-rename-folder(string, string);
+    callback on-static-remove-folder(string);
+    callback on-static-create-folder(string);
+    callback on-static-toggle-compromised-mode();
+    callback on-static-back();
+
+    // Exportação 
+    callback on-export-toggle(int);
+    callback on-export-select-all();
+    callback on-export-deselect-all();
+    callback on-export-filter-device(int);
+    callback on-export(string, string, string, bool, bool, string, string);
+    callback on-export-open();   // Refresca a árvore ao abrir a vista
+    callback on-export-back();
+
+    // Pesquisa
+    callback on-search-query(string /*query*/);
+    callback on-search-select(string /*kind*/, string /*uuid*/);
+
+    // Definições
+    callback on-set-calibration(string, string);
+    callback on-clear-calibration();
+    callback on-set-benchmark-argon2(string, string, string);
+    callback on-set-benchmark-export(string, string, string, string, string);
+    callback on-delete-local();
+    callback on-set-wasm-browser-storage(bool);
+    callback on-pick-replace-session();
+    callback on-open-benchmark();
+
+    // Benchmark 
+    callback on-run-calibration();
+    callback on-run-export();
+    callback on-benchmark-open-settings();
+
+    // Quick-save modal (abre ao clicar "Guardar sessão" no menu)
+    in-out property <bool>   quick-save-show:   false;
+    in property <string>     quick-save-error:  "";
+
+    // Aviso de alterações não guardadas - calculado pelo Rust no momento do clique em "Bloquear" (vault.has_unsaved_changes()), não reativo.
+    in-out property <bool>   lock-unsaved-confirm-show: false;
+    // true quando este diálogo foi aberto por uma tentativa de fechar a janela (em vez de "Bloquear") - "Continuar" termina a app em vez de apenas bloquear a sessão.
+    in-out property <bool>   lock-unsaved-is-quit: false;
+
+    // Modal de calibração (CalibrationModal)
+    in-out property <bool>   calibration-modal-show:        false;
+    in-out property <bool>   calibration-modal-verifying:   false;
+    in-out property <bool>   calibration-modal-verify-done: false;
+    in-out property <string> calibration-modal-verify-ms;
+    callback on-calibration-verify(string /*m*/, string /*t*/, string /*p*/);
+    callback on-calibration-accept(string /*m*/, string /*t*/, string /*p*/);
+
+    // ECRÃ DE LOGIN  (visível quando !is-unlocked)
+    if !is-unlocked && login-view == 0 : LoginView {
+        default-session-path: root.login-default-path;
+        error:                root.login-error;
+        hmac-warning:         root.login-hmac-warning;
+        hmac-tampered:        root.login-hmac-tampered;
+        is-loading:           root.loading-show;
+        picked-path:          root.picked-path;
+        pick-seq:             root.pick-seq;
+        app-version:          root.app-version;
+        is-wasm:              root.is-wasm;
+        xor-a-loaded:         root.login-xor-a-loaded;
+        xor-b-loaded:         root.login-xor-b-loaded;
+        on-pick-path(kind, current) => { root.on-pick-path(kind, current) }
+        on-pick-xor-file-login(which) => { root.on-pick-xor-file-login(which) }
+        on-pre-unlock(path) => { root.on-pre-unlock(path) }
+        on-unlock(path, k1, k2, kext, xor-a, xor-b) => {
+            root.on-login(path, k1, k2, kext, xor-a, xor-b);
+        }
+        on-open-tutorial  => { root.show-tutorial = true; root.on-open-tutorial(); }
+        on-confirm-no-hmac => { root.on-login-confirm-no-hmac(); }
+        on-open-settings  => { root.on-prelogin-open-settings(); root.login-view = 2; }
+    }
+
+    // Configurações acessíveis ANTES do login 
+    if !is-unlocked && login-view == 2 : VerticalLayout {
+        width:  100%;
+        height: 100%;
+        // Barra de topo com voltar ao login
+        Rectangle {
+            height:     48px;
+            background: Palette.bg-panel;
+
+            Rectangle {
+                x: 0; y: parent.height - 1px;
+                width: 100%; height: 1px;
+                background: Palette.border;
+            }
+
+            HorizontalLayout {
+                padding-left:  12px;
+                padding-right: 24px;
+                spacing:       8px;
+                alignment:     start;
+
+                VerticalLayout { alignment: center; BackButton { clicked => { root.login-view = 0; } } }
+                Text {
+                    text:               "Configurações";
+                    font-size:          15px;
+                    font-weight:        700;
+                    color:              Palette.text-heading;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+            }
+        }
+
+        SettingsView {
+            avail-width:           root.width;
+            state:                 root.settings-state;
+            error-calibration:     root.settings-error-calibration;
+            error-argon2:          root.settings-error-argon2;
+            error-export:          root.settings-error-export;
+            error-local:           root.settings-error-local;
+            error-browser-storage: root.settings-error-browser-storage;
+            is-wasm:                root.is-wasm;
+            active-panel:          root.settings-active-panel;
+            calibration-running:   root.benchmark-calibration-running;
+
+            on-set-calibration(min, max)      => { root.on-set-calibration(min, max); }
+            on-clear-calibration              => { root.on-clear-calibration(); }
+            on-set-benchmark-argon2(m, t, p)  => { root.on-set-benchmark-argon2(m, t, p); }
+            on-set-benchmark-export(devs, doms, stat, k1, k2) => { root.on-set-benchmark-export(devs, doms, stat, k1, k2); }
+            on-delete-local                   => { root.on-delete-local(); }
+            on-set-wasm-browser-storage(v)    => { root.on-set-wasm-browser-storage(v); }
+            on-pick-replace-session           => { root.on-pick-replace-session(); }
+            on-calibrate-argon2               => { root.on-run-calibration(); root.calibration-modal-show = true; }
+            on-open-benchmark                 => { root.on-open-benchmark(); root.benchmark-calibration-has-result = false; root.login-view = 3; }
+        }
+    }
+
+    // Benchmark acessível ANTES do login (dentro de Configurações)
+    if !is-unlocked && login-view == 3 : VerticalLayout {
+        width:  100%;
+        height: 100%;
+
+        Rectangle {
+            height:     48px;
+            background: Palette.bg-panel;
+
+            Rectangle {
+                y:          parent.height - 1px;
+                width:      100%;
+                height:     1px;
+                background: Palette.border;
+            }
+
+            HorizontalLayout {
+                padding-left:  12px;
+                padding-right: 24px;
+                spacing:       8px;
+                alignment:     start;
+
+                VerticalLayout { alignment: center; BackButton { clicked => { root.login-view = 2; } } }
+                Text {
+                    text:               "Configurações";
+                    font-size:          15px;
+                    font-weight:        700;
+                    color:              Palette.text-heading;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text:               "/ Benchmark";
+                    font-size:          15px;
+                    color:              Palette.text-muted;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+            }
+        }
+
+        BenchmarkView {
+            vertical-stretch:         1;
+            avail-width:              root.width;
+            active-panel:             root.benchmark-active-panel;
+            current-min-ms:           root.benchmark-current-min-ms;
+            current-max-ms:           root.benchmark-current-max-ms;
+            config-argon2-m:          root.benchmark-config-argon2-m;
+            config-argon2-t:          root.benchmark-config-argon2-t;
+            config-argon2-p:          root.benchmark-config-argon2-p;
+            config-devices:           root.benchmark-config-devices;
+            config-domains:           root.benchmark-config-domains;
+            config-static:            root.benchmark-config-static;
+            config-k1-len:            root.benchmark-config-k1-len;
+            config-k2-len:            root.benchmark-config-k2-len;
+            calibration-running:      root.benchmark-calibration-running;
+            calibration-has-result:   root.benchmark-calibration-has-result;
+            calibration-result:       root.benchmark-calibration-result;
+            error-calibration:        root.benchmark-error-calibration;
+            export-running:           root.benchmark-export-running;
+            export-has-result:        root.benchmark-export-has-result;
+            export-result:            root.benchmark-export-result;
+            error-export:             root.benchmark-error-export;
+
+            on-run-calibration => { root.on-run-calibration(); }
+            on-run-export      => { root.on-run-export(); }
+            on-open-settings   => { root.login-view = 2; }
+        }
+    }
+
+    if is-unlocked : ExportView {
+        x: 0px;
+        y: main-header-rect.height;
+        width:  root.width;
+        height: root.height - main-header-rect.height;
+        visible: root.active-view == 4;
+
+        avail-width:  root.width;
+        tree-nodes:   root.export-tree-nodes;
+        summary:      root.export-summary;
+        default-path: root.session-default-path;
+        error:        root.export-error;
+        is-exporting: root.export-is-exporting;
+        picked-path:  root.picked-path;
+        pick-seq:     root.pick-seq;
+
+        on-pick-path(kind, current)   => { root.on-pick-path(kind, current) }
+        on-toggle-node(idx)           => { root.on-export-toggle(idx); }
+        on-select-all                 => { root.on-export-select-all(); }
+        on-deselect-all               => { root.on-export-deselect-all(); }
+        on-filter-by-device(idx)      => { root.on-export-filter-device(idx); }
+        on-export(name, folder, fmt, comp, meta, k1, k2) => { root.on-export(name, folder, fmt, comp, meta, k1, k2); }
+        on-back                       => { root.on-export-back(); }
+    }
+
+    // CABEÇALHO PRINCIPAL - horizontal (≥800px) ou ☰ toggle (<800px). Sempre instanciado (nunca dentro de `if is-unlocked`) 
+    main-header-rect := Rectangle {
+        // x/y/width explícitos - sem isto, sendo um filho directo da Window
+        // sem layout, o Slint centra-o em vez de o colocar no topo a usar a
+        // largura toda (motivo de aparecer "ausente": ficava ao centro, por
+        // baixo do resto do conteúdo, em vez de no topo, e por isso fica
+        // facilmente coberto / parece que "não carrega").
+        x:          0px;
+        y:          0px;
+        width:      100%;
+        visible:    root.is-unlocked;
+        height:     root.is-unlocked ? header-layout.preferred-height : 0px;
+        background: Palette.bg-panel;
+        border-width:  0px;
+
+            // Linha separadora inferior
+            Rectangle {
+                x:          0;
+                y:          parent.height - 1px;
+                width:      100%;
+                height:     1px;
+                background: Palette.border;
+            }
+
+            header-layout := HorizontalLayout {
+                padding-left:   WindowMetrics.avail-width < 400px ? 8px : 16px;
+                padding-right:  WindowMetrics.avail-width < 400px ? 8px : 16px;
+                padding-top:    WindowMetrics.avail-width < 400px ? 6px : 10px;
+                padding-bottom: WindowMetrics.avail-width < 400px ? 6px : 10px;
+                spacing:        0px;
+                alignment:      start;
+
+                // Narrow: apenas botão ☰
+                if WindowMetrics.avail-width < Tokens.mobile-breakpoint : VerticalLayout {
+                    alignment: center;
+                    HeaderMenuToggle {
+                        open:    root.main-menu-open;
+                        clicked => { root.main-menu-open = !root.main-menu-open; }
+                    }
+                }
+
+                if WindowMetrics.avail-width >= Tokens.mobile-breakpoint : HorizontalLayout {
+                    spacing:       4px;
+                    alignment:     start;
+                    horizontal-stretch: 1;
+
+                    // Logo/titulo
+                    VerticalLayout {
+                        alignment: center;
+                        Text {
+                            text:        "VaultSeed";
+                            font-size:   Tokens.fs-title;
+                            font-weight: 700;
+                            color:       Palette.text-heading;
+                        }
+                    }
+
+                    // Spacer
+                    Rectangle { width: 32px; }
+
+                    // Nav items primários
+                    for nav-item in [
+                        { id: 0, label: "Dispositivos" },
+                        { id: 1, label: "Sessão" },
+                        { id: 4, label: "Exportar" },
+                        { id: 5, label: "Pesquisa" },
+                    ] : VerticalLayout {
+                        alignment: center;
+                        Rectangle {
+                            width: nav-ta-text.preferred-width + 24px;
+                            height: 32px;
+                            border-radius: 6px;
+                            background: active-view == nav-item.id ? Palette.bg-active
+                                      : nav-item-ta.has-hover      ? Palette.bg-hover
+                                      : transparent;
+                            animate background { duration: 120ms; }
+
+                            nav-item-ta := TouchArea {
+                                clicked => {
+                                    active-view = nav-item.id;
+                                    if nav-item.id == 0 { root.active-sub-view = 0; }
+                                    if nav-item.id == 4 { root.on-export-open(); }
+                                    root.main-menu-open = false;
+                                }
+                            }
+
+                            nav-ta-text := Text {
+                                text:               nav-item.label;
+                                font-size:          Tokens.fs-body;
+                                font-weight:        active-view == nav-item.id ? 700 : 400;
+                                color:              active-view == nav-item.id ? Palette.text-heading : Palette.text-primary;
+                                vertical-alignment: center;
+                                horizontal-alignment: center;
+                                animate color { duration: 120ms; }
+                            }
+                        }
+                    }
+
+                    // Flex space
+                    Rectangle { horizontal-stretch: 1; }
+
+                    // Botão ... (Sistema) - centrado em altura
+                    VerticalLayout {
+                        alignment: center;
+                        sistema-btn := Rectangle {
+                            width:         36px;
+                            height:        36px;
+                            border-radius: 6px;
+                            background:    sistema-ta.has-hover || root.main-menu-open ? Palette.bg-active : transparent;
+                            animate background { duration: 120ms; }
+
+                            sistema-ta := TouchArea {
+                                clicked => { root.main-menu-open = !root.main-menu-open; }
+                            }
+
+                            IconMore {
+                                x: (parent.width  - self.width)  / 2;
+                                y: (parent.height - self.height) / 2;
+                                size:       18px;
+                                icon-color: root.main-menu-open ? Palette.accent : Palette.text-muted;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+    // LAYOUT PRINCIPAL (visível quando is-unlocked)
+    if is-unlocked : VerticalLayout {
+        width:  100%;
+        height: 100%;
+
+        // Reserva o espaço do cabeçalho principal (main-header-rect) para que o conteúdo não fique por baixo dele
+        Rectangle {
+            height: main-header-rect.height;
+        }
+
+        // MENU COLAPSÁVEL - narrow: full nav; wide: apenas Sistema
+        if root.main-menu-open : Rectangle {
+            background: Palette.bg-sidebar;
+            border-width: 0px;
+
+            // Linha separadora inferior
+            Rectangle {
+                x:          0;
+                y:          parent.height - 1px;
+                width:      100%;
+                height:     1px;
+                background: Palette.border;
+            }
+
+            VerticalLayout {
+                padding-left:   10px;
+                padding-right:  10px;
+                padding-top:    8px;
+                padding-bottom: 8px;
+                spacing:        2px;
+                alignment:      start;
+
+                // Mostrar nav principal só em modo narrow
+                if root.width < Tokens.mobile-breakpoint : SidebarGroupLabel { label: "COFRE"; }
+                if root.width < Tokens.mobile-breakpoint : SidebarNavItem {
+                    label:  "Dispositivos";
+                    active: active-view == 0;
+                    clicked => { active-view = 0; root.active-sub-view = 0; root.main-menu-open = false; }
+                }
+                if root.width < Tokens.mobile-breakpoint : SidebarNavItem {
+                    label:  "Sessão";
+                    active: active-view == 1;
+                    clicked => { active-view = 1; root.main-menu-open = false; }
+                }
+                if root.width < Tokens.mobile-breakpoint : SidebarNavItem {
+                    label:  "Exportar";
+                    active: active-view == 4;
+                    clicked => { active-view = 4; root.on-export-open(); root.main-menu-open = false; }
+                }
+                if root.width < Tokens.mobile-breakpoint : SidebarNavItem {
+                    label:  "Pesquisa";
+                    active: active-view == 5;
+                    clicked => { active-view = 5; root.main-menu-open = false; }
+                }
+
+                if root.width < Tokens.mobile-breakpoint : Divider {}
+
+                SidebarGroupLabel { label: "SISTEMA"; }
+                SidebarNavItem {
+                    label:  "Configurações";
+                    active: active-view == 2;
+                    clicked => { active-view = 2; root.main-menu-open = false; }
+                }
+                SidebarNavItem {
+                    label:  "Benchmark";
+                    active: active-view == 3;
+                    clicked => { active-view = 3; root.main-menu-open = false; }
+                }
+                SidebarNavItem {
+                    label:  "Guardar sessão";
+                    clicked => { root.quick-save-show = true; root.main-menu-open = false; }
+                }
+                SidebarNavItem {
+                    label:  "Bloquear";
+                    clicked => {
+                        root.main-menu-open = false;
+                        root.on-lock();
+                    }
+                }
+            }
+        }
+
+        // ÁREA DE CONTEÚDO
+        VerticalLayout {
+            vertical-stretch: 1;
+
+            if active-view == 0 && active-sub-view == 0 : DevicesView {
+                avail-width:        root.width;
+                devices:            root.devices;
+                selected-index:     root.devices-selected-index;
+                selected-device:    root.devices-selected-device;
+                show-add-form <=>   root.devices-show-add-form;
+                default-argon2-m:   root.devices-default-argon2-m;
+                default-argon2-t:   root.devices-default-argon2-t;
+                default-argon2-p:   root.devices-default-argon2-p;
+                error-add:          root.devices-error-add;
+                error-rename:       root.devices-error-rename;
+                error-argon2:       root.devices-error-argon2;
+                error-nonce:        root.devices-error-nonce;
+                pending-calibration-m <=> root.devices-pending-calibration-m;
+                pending-calibration-t <=> root.devices-pending-calibration-t;
+                pending-calibration-p <=> root.devices-pending-calibration-p;
+                calibrating:               root.devices-calibration-running;
+                calibration-add-seq:      root.devices-add-calibration-seq;
+                calibration-add-m:        root.devices-add-calibrated-m;
+                calibration-add-t:        root.devices-add-calibrated-t;
+                calibration-add-p:        root.devices-add-calibrated-p;
+
+                on-request-calibration-for-add => {
+                    root.devices-add-calibration-pending = true;
+                    root.devices-show-calibration-result = false;
+                    root.devices-calibration-modal-show  = true;
+                    root.devices-calibration-running     = true;
+                    root.on-devices-calibrate-run();
+                }
+
+                on-select(uuid)                       => { root.on-devices-select(uuid); }
+                on-add-device(name, m, t, p, salt, seed-source, seed-value, k1, k2) => { root.on-devices-add(name, m, t, p, salt, seed-source, seed-value, k1, k2); }
+                on-rename(uuid, new-name)             => { root.on-devices-rename(uuid, new-name); }
+                on-edit-argon2(uuid, m, t, p, k1, k2) => { root.on-devices-edit-argon2(uuid, m, t, p, k1, k2); }
+                on-edit-nonce(uuid, nonce, k1, k2)    => { root.on-devices-edit-nonce(uuid, nonce, k1, k2); }
+                on-regenerate-salt(uuid, k1, k2)      => { root.on-devices-regenerate-salt(uuid, k1, k2); }
+                on-remove-request(uuid)               => { root.on-devices-remove-request(uuid); }
+                on-go-restrictions(uuid)              => { root.on-devices-go-restrictions(uuid); }
+                on-go-static-passwords(uuid)          => { root.on-devices-go-static-passwords(uuid); }
+                on-open-calibration                   => {
+                    root.devices-calibration-modal-show     = true;
+                    root.devices-show-calibration-result    = false;
+                    root.devices-pending-calibration-m      = "";
+                    root.devices-pending-calibration-t      = "";
+                    root.devices-pending-calibration-p      = "";
+                    root.devices-calibration-running        = true;
+                    root.on-devices-calibrate-run();
+                }
+            }
+
+            if active-view == 0 && active-sub-view == 1 : RestrictionsView {
+                avail-width:            root.width;
+                device-name:            root.restrictions-device-name;
+                device-uuid:            root.restrictions-device-uuid;
+                restrictions:           root.restrictions;
+                selected-index:         root.restrictions-selected-index;
+                selected-restriction:   root.restrictions-selected-restriction;
+                sequence:               root.restrictions-sequence;
+                char-lists:             root.restrictions-char-lists;
+                card-char-lists:        root.restrictions-card-char-lists;
+                position-char-lists:    root.restrictions-position-char-lists;
+                position-detail:        root.restrictions-position-detail;
+                card-preview:           root.restrictions-card-preview;
+                sequence-end-x:         root.restrictions-sequence-end-x;
+                drag-target-gap:        root.restrictions-drag-target-gap;
+                drag-over-trash:        root.restrictions-drag-over-trash;
+                show-add-form <=>       root.restrictions-show-add-form;
+                error-add:              root.restrictions-error-add;
+                error-rename:           root.restrictions-error-rename;
+                error-sequence:         root.restrictions-error-sequence;
+                error-charlist:         root.restrictions-error-charlist;
+                show-format-modal    <=> root.restrictions-show-format-modal;
+                format-modal-uuid    <=> root.restrictions-format-modal-uuid;
+                format-modal-replace <=> root.restrictions-format-modal-replace;
+                show-example         <=> root.restrictions-show-example;
+                example-password:        root.restrictions-example-password;
+                example-entropy:         root.restrictions-example-entropy;
+                example-length:          root.restrictions-example-length;
+
+                on-select(uuid)                                 => { root.on-restrictions-select(uuid); }
+                on-add(name)                                    => { root.on-restrictions-add(name); }
+                on-rename(uuid, name)                           => { root.on-restrictions-rename(uuid, name); }
+                on-toggle-list(bit)                             => { root.on-restrictions-toggle-mask-list(bit); }
+                on-reset-default                                => { root.on-restrictions-reset-mask-default(); }
+                on-set-default-mask                             => { root.on-restrictions-set-default-mask(); }
+                on-select-card-kind(kind)                       => { root.on-restrictions-select-card-kind(kind); }
+                on-toggle-card-mask-list(bit)                   => { root.on-restrictions-toggle-card-mask-list(bit); }
+                on-clear-card-config                            => { root.on-restrictions-clear-card-config(); }
+                on-clear-sequence(uuid)                          => { root.on-restrictions-clear-sequence(uuid); }
+                on-drag-move(x)                                 => { root.on-restrictions-drag-move(x); }
+                on-reorder-position(src, tgt)                   => { root.on-restrictions-reorder-position(src, tgt); }
+                on-insert-positions(tgt, kind, lit, qty)        => { root.on-restrictions-insert-positions(tgt, kind, lit, qty); }
+                on-remove-sequence-item(uuid, idx)              => { root.on-restrictions-remove-sequence-item(uuid, idx); }
+                on-extend-entropy(uuid, bits)                   => { root.on-restrictions-extend-entropy(uuid, bits); }
+                on-view-position(idx)                           => { root.on-restrictions-view-position(idx); }
+                on-close-position-detail                        => { root.on-restrictions-close-position-detail(); }
+                on-remove-viewed-position                       => { root.on-restrictions-remove-viewed-position(); }
+                on-toggle-position-mask-list(bit)               => { root.on-restrictions-toggle-position-mask-list(bit); }
+                on-add-charlist(uuid, name, elems)              => { root.on-restrictions-add-charlist(uuid, name, elems); }
+                on-edit-charlist-elements(ruuid, cluuid, elems) => { root.on-restrictions-edit-charlist-elements(ruuid, cluuid, elems); }
+                on-remove-charlist(ruuid, cluuid)               => { root.on-restrictions-remove-charlist(ruuid, cluuid); }
+                on-remove-request(uuid)                         => { root.on-restrictions-remove-request(uuid); }
+                on-go-domains(uuid)                             => { root.on-restrictions-go-domains(uuid); }
+                on-generate-default-format(uuid)                => { root.on-restrictions-generate-default-format(uuid); }
+                on-view-example(uuid)                            => { root.on-restrictions-view-example(uuid); }
+                on-back                                         => { root.on-restrictions-back(); }
+                compute-lines(text, limit)                      => { root.compute-mixed-font-lines(text, limit) }
+            }
+
+            if active-view == 0 && active-sub-view == 2 : StaticPasswordsView {
+                avail-width:              root.width;
+                device-name:              root.static-device-name;
+                device-uuid:              root.static-device-uuid;
+                folders:                  root.static-folders;
+                selected-folder-index:    root.static-selected-folder-index;
+                passwords:                root.static-passwords;
+                selected-pw-index:        root.static-selected-pw-index;
+                selected-detail:          root.static-selected-detail;
+                value-visible:            root.static-value-visible;
+                notes-visible:            root.static-notes-visible;
+                show-compromised-mode:    root.static-show-compromised-mode;
+                show-add-form <=>         root.static-show-add-form;
+                show-folder-mgmt <=>      root.static-show-folder-mgmt;
+                error-add:                root.static-error-add;
+                error-decrypt:            root.static-error-decrypt;
+                error-compromise:         root.static-error-compromise;
+                error-rename:             root.static-error-rename;
+                error-remove:             root.static-error-remove;
+                error-create:             root.static-error-create-folder;
+
+                on-select-folder(folder, compromised)    => { root.on-static-select-folder(folder, compromised); }
+                on-select-password(uuid)                 => { root.on-static-select-password(uuid); }
+                on-add(label, value, notes, k1, k2)      => { root.on-static-add(label, value, notes, k1, k2); }
+                on-view(uuid, k1, k2)                    => { root.on-static-view(uuid, k1, k2); }
+                on-view-notes(uuid, k1, k2)               => { root.on-static-view-notes(uuid, k1, k2); }
+                on-copy(uuid, k1, k2)                    => { root.on-static-copy(uuid, k1, k2); }
+                on-mark-compromised(uuid, k1, k2)        => { root.on-static-mark-compromised(uuid, k1, k2); }
+                on-close-value                           => { root.on-static-close-value(); }
+                on-close-notes                            => { root.on-static-close-notes(); }
+                on-remove-request(uuid)                  => { root.on-static-remove-request(uuid); }
+                on-rename(uuid, name, k1, k2)              => { root.on-static-rename(uuid, name, k1, k2); }
+                on-edit-notes(uuid, notes, k1, k2)        => { root.on-static-edit-notes(uuid, notes, k1, k2); }
+                on-rename-folder(old, new)               => { root.on-static-rename-folder(old, new); }
+                on-remove-folder(name)                   => { root.on-static-remove-folder(name); }
+                on-create-folder(name)                   => { root.on-static-create-folder(name); }
+                on-toggle-compromised-mode               => { root.on-static-toggle-compromised-mode(); }
+                on-back                                  => { root.on-static-back(); }
+            }
+
+            if active-view == 0 && active-sub-view == 3 : DomainsView {
+                avail-width:             root.width;
+                restriction-name:        root.domains-restriction-name;
+                restriction-uuid:        root.domains-restriction-uuid;
+                restriction-has-format:  root.domains-restriction-has-format;
+                device-name:             root.domains-device-name;
+                domains:                 root.domains;
+                selected-index:          root.domains-selected-index;
+                selected-domain:         root.domains-selected-domain;
+                password-result:         root.domains-password-result;
+                password-visible:        root.domains-password-visible;
+                show-password-card:      root.domains-show-password-card;
+                compromised-versions:    root.domains-compromised-versions;
+                available-restrictions:  root.domains-available-restrictions;
+                selected-version-index:  root.domains-selected-version-index;
+                frozen-detail:           root.domains-frozen-detail;
+                show-add-form <=>        root.domains-show-add-form;
+                error-add:               root.domains-error-add;
+                error-generate:          root.domains-error-generate;
+                error-compromise:        root.domains-error-compromise;
+                error-restriction:       root.domains-error-restriction;
+
+                on-select(uuid)                               => { root.on-domains-select(uuid); }
+                on-add(identifier)                            => { root.on-domains-add(identifier); }
+                on-view-password(uuid, k1, k2)                => { root.on-domains-view-password(uuid, k1, k2); }
+                on-copy-password(uuid, k1, k2)                => { root.on-domains-copy-password(uuid, k1, k2); }
+                on-compromise(uuid, k1, k2)                   => { root.on-domains-compromise(uuid, k1, k2); }
+                on-change-restriction(uuid, ruuid)            => { root.on-domains-change-restriction(uuid, ruuid); }
+                on-select-version(uuid, record)               => { root.on-domains-select-version(uuid, record); }
+                on-view-frozen(uuid, record, k1, k2)          => { root.on-domains-view-frozen(uuid, record, k1, k2); }
+                on-copy-frozen(uuid, record, k1, k2)          => { root.on-domains-copy-frozen(uuid, record, k1, k2); }
+                on-delete-frozen(uuid, record)                => { root.on-domains-delete-frozen(uuid, record); }
+                on-remove-request(uuid)                       => { root.on-domains-remove-request(uuid); }
+                on-close-password                             => { root.on-domains-close-password(); }
+                on-back                                       => { root.on-domains-back(); }
+                compute-lines(text, limit)                    => { root.compute-mixed-font-lines(text, limit) }
+            }
+
+            if active-view == 1 : SessionView {
+                avail-width:              root.width;
+                picked-path:              root.picked-path;
+                pick-seq:                 root.pick-seq;
+                overview:                 root.session-overview;
+                default-path:             root.session-default-path;
+                active-panel:             root.session-active-panel;
+                error-argon2:             root.session-error-argon2;
+                error-save:               root.session-error-save;
+                error-hardware:           root.session-error-hardware;
+                error-xor:                root.session-error-xor;
+                success-xor:              root.session-success-xor;
+                error-rotate:             root.session-error-rotate;
+                error-delete-session:     root.session-error-delete-session;
+                is-wasm:                  root.is-wasm;
+                xor-a-loaded:             root.session-xor-a-loaded;
+                xor-b-loaded:             root.session-xor-b-loaded;
+                show-calibration-result:  root.session-show-calibration-result;
+                calibration-result:       root.session-calibration-result;
+
+                on-calibrate(secs)                                  => { root.on-calibrate(secs); root.session-calibration-modal-show = true; }
+                on-apply-calibration                                => { root.on-apply-calibration(); }
+                on-apply-manual-argon2(m, t, p)                     => { root.on-apply-manual-argon2(m, t, p); }
+                on-regenerate-salt                                  => { root.on-regenerate-salt(); }
+                on-save(path, k1, k2, kext, xa, xb, hmac)           => { root.on-save(path, k1, k2, kext, xa, xb, hmac); }
+                on-activate-hardware(kext, src, path, k1, k2)       => { root.on-activate-hardware(kext, src, path, k1, k2); }
+                on-deactivate-hardware(path, k1, k2)                => { root.on-deactivate-hardware(path, k1, k2); }
+                on-create-xor(a, b, k1, k2)                         => { root.on-create-xor(a, b, k1, k2); }
+                on-verify-xor(a, b)                                 => { root.on-verify-xor(a, b); }
+                on-verify-xor-loaded                                => { root.on-verify-xor-loaded(); }
+                on-pick-xor-file(which)                             => { root.on-pick-xor-file(which); }
+                on-delete-session-file                              => { root.on-delete-session-file(); }
+                on-rotate-keys(ok1, ok2, nk1, nk2, ck1, ck2, path)  => { root.on-rotate-keys(ok1, ok2, nk1, nk2, ck1, ck2, path); }
+                on-pick-path(kind, current)                         => { root.on-pick-path(kind, current) }
+            }
+
+            if active-view == 2 : SettingsView {
+                avail-width:           root.width;
+                state:                 root.settings-state;
+                error-calibration:     root.settings-error-calibration;
+                error-argon2:          root.settings-error-argon2;
+                error-export:          root.settings-error-export;
+                error-local:           root.settings-error-local;
+                error-browser-storage: root.settings-error-browser-storage;
+                is-wasm:                root.is-wasm;
+                active-panel:          root.settings-active-panel;
+                calibration-running:   root.benchmark-calibration-running;
+
+                on-set-calibration(min, max)                      => { root.on-set-calibration(min, max); }
+                on-clear-calibration                              => { root.on-clear-calibration(); }
+                on-set-benchmark-argon2(m, t, p)                  => { root.on-set-benchmark-argon2(m, t, p); }
+                on-set-benchmark-export(devs, doms, stat, k1, k2) => { root.on-set-benchmark-export(devs, doms, stat, k1, k2); }
+                on-delete-local                                   => { root.on-delete-local(); }
+                on-set-wasm-browser-storage(v)                    => { root.on-set-wasm-browser-storage(v); }
+                on-pick-replace-session                           => { root.on-pick-replace-session(); }
+                on-calibrate-argon2                               => { root.on-run-calibration(); root.calibration-modal-show = true; }
+                on-open-benchmark                                 => { root.on-open-benchmark(); root.benchmark-calibration-has-result = false; }
+            }
+
+            if active-view == 3 : BenchmarkView {
+                avail-width:              root.width;
+                active-panel:             root.benchmark-active-panel;
+                current-min-ms:           root.benchmark-current-min-ms;
+                current-max-ms:           root.benchmark-current-max-ms;
+                config-argon2-m:          root.benchmark-config-argon2-m;
+                config-argon2-t:          root.benchmark-config-argon2-t;
+                config-argon2-p:          root.benchmark-config-argon2-p;
+                config-devices:           root.benchmark-config-devices;
+                config-domains:           root.benchmark-config-domains;
+                config-static:            root.benchmark-config-static;
+                config-k1-len:            root.benchmark-config-k1-len;
+                config-k2-len:            root.benchmark-config-k2-len;
+                calibration-running:      root.benchmark-calibration-running;
+                calibration-has-result:   root.benchmark-calibration-has-result;
+                calibration-result:       root.benchmark-calibration-result;
+                error-calibration:        root.benchmark-error-calibration;
+                export-running:           root.benchmark-export-running;
+                export-has-result:        root.benchmark-export-has-result;
+                export-result:            root.benchmark-export-result;
+                error-export:             root.benchmark-error-export;
+
+                on-run-calibration => { root.on-run-calibration(); }
+                on-run-export      => { root.on-run-export(); }
+                on-open-settings   => { root.on-benchmark-open-settings(); }
+            }
+
+            if active-view == 5 : SearchView {
+                avail-width: root.width;
+                query:       root.search-query;
+                results:     root.search-results;
+
+                on-search(q)                    => { root.on-search-query(q); }
+                on-select-result(kind, uuid)    => { root.on-search-select(kind, uuid); }
+            }
+        }
+    }
+
+    // CAMADA DE OVERLAYS - sempre em cima, por ordem de prioridade
+
+    // Tutorial (prioridade máxima - cobre tudo) 
+    TutorialModal {
+        show:                   root.show-tutorial;
+        step:                   root.tutorial-step;
+        default-session-path:   root.tutorial-default-path;
+        default-device-name:    root.tutorial-default-device;
+        error-message:          root.tutorial-error;
+        generated-password:     root.tutorial-password;
+        is-loading:             root.tutorial-loading;
+        loading-message:        root.tutorial-loading-msg;
+        step1-file-warning:     root.tutorial-step1-file-warning;
+        device-m            <=> root.tutorial-device-m;
+        device-t            <=> root.tutorial-device-t;
+        device-p            <=> root.tutorial-device-p;
+        device-time-ms      <=> root.tutorial-device-time-ms;
+        device-calibrating:     root.tutorial-device-calibrating;
+        session-m           <=> root.tutorial-session-m;
+        session-t           <=> root.tutorial-session-t;
+        session-p           <=> root.tutorial-session-p;
+        session-time-ms     <=> root.tutorial-session-time-ms;
+        session-calibrating:    root.tutorial-session-calibrating;
+        on-pick-path(kind, current) => { root.on-pick-path(kind, current) }
+
+        on-cancel                            => { root.on-tutorial-cancel(); }
+        on-step0-next                        => { root.on-tutorial-step0-next(); }
+        on-step1-confirm (p, d)              => { root.on-tutorial-step1(p, d); }
+        on-step1-override                    => { root.on-tutorial-step1-override(); }
+        on-step1-acknowledge-warning         => { root.on-tutorial-step1-acknowledge-warning(); }
+        on-device-calibrate-auto             => { root.on-tutorial-device-calibrate-auto(); }
+        on-device-calibrate (m, t, p)        => { root.on-tutorial-device-calibrate(m, t, p); }
+        on-device-calibrate-next (m, t, p)   => { root.on-tutorial-device-calibrate-next(m, t, p); }
+        on-step2-confirm (d)                 => { root.on-tutorial-step2(d); }
+        on-session-calibrate-auto            => { root.on-tutorial-session-calibrate-auto(); }
+        on-session-calibrate (m, t, p)       => { root.on-tutorial-session-calibrate(m, t, p); }
+        on-session-calibrate-next (m, t, p)  => { root.on-tutorial-session-calibrate-next(m, t, p); }
+        on-step3-confirm (k1, k2)            => { root.on-tutorial-step3(k1, k2); }
+        on-step4-confirm (k1, k2)            => { root.on-tutorial-step4(k1, k2); }
+        on-step7-verify  (k1, k2)            => { root.on-tutorial-step7-verify(k1, k2); }
+        on-step7-restart                     => { root.on-tutorial-step7-restart(); }
+        on-finish        (k1, k2)            => { root.on-tutorial-finish(k1, k2); }
+    }
+
+    // Loading overlay 
+    LoadingOverlay {
+        show:    root.loading-show;
+        message: root.loading-message;
+    }
+
+    // Modal de calibração 
+    // Aparece quando há resultado de calibração e o pedido foi feito.
+    CalibrationModal {
+        show:        root.calibration-modal-show && root.benchmark-calibration-has-result;
+        title:       "Calibração Argon2id";
+        result-m:    "\{root.benchmark-calibration-result.m-cost}";
+        result-t:    "\{root.benchmark-calibration-result.t-cost}";
+        result-p:    "\{root.benchmark-calibration-result.p-cost}";
+        result-ms:   "\{root.benchmark-calibration-result.argon2-ms}";
+        verifying:   root.calibration-modal-verifying;
+        verify-done <=> root.calibration-modal-verify-done;
+        verify-ms:   root.calibration-modal-verify-ms;
+
+        on-cancel => { root.calibration-modal-show = false; }
+        on-accept(m, t, p) => {
+            root.on-calibration-accept(m, t, p);
+            root.calibration-modal-show = false;
+        }
+        on-verify(m, t, p) => { root.on-calibration-verify(m, t, p); }
+    }
+
+    // Modal de calibração - edição Argon2id de dispositivo 
+    CalibrationModal {
+        show:        root.session-calibration-modal-show && root.session-show-calibration-result;
+        title:       "Calibração Argon2id (dispositivo)";
+        result-m:    "\{root.session-calibration-result.m-cost}";
+        result-t:    "\{root.session-calibration-result.t-cost}";
+        result-p:    "\{root.session-calibration-result.p-cost}";
+        result-ms:   "\{root.session-calibration-result.duration-ms}";
+        // Reutiliza o estado/medição de verificação (só um modal aparece de cada vez).
+        verifying:   root.calibration-modal-verifying;
+        verify-done <=> root.calibration-modal-verify-done;
+        verify-ms:   root.calibration-modal-verify-ms;
+
+        on-cancel => { root.session-calibration-modal-show = false; }
+        on-accept(m, t, p) => {
+            root.on-apply-manual-argon2(m, t, p);
+            root.session-calibration-modal-show = false;
+        }
+        on-verify(m, t, p) => { root.on-calibration-verify(m, t, p); }
+    }
+
+    // Modal de calibração - formulário Argon2id de dispositivo (preenche o formulário; aplicar continua a exigir K1/K2 no botão "Aplicar").
+    CalibrationModal {
+        show:        root.devices-calibration-modal-show && root.devices-show-calibration-result;
+        title:       "Calibração Argon2id (dispositivo)";
+        result-m:    "\{root.devices-calibration-result.m-cost}";
+        result-t:    "\{root.devices-calibration-result.t-cost}";
+        result-p:    "\{root.devices-calibration-result.p-cost}";
+        result-ms:   "\{root.devices-calibration-result.duration-ms}";
+        verifying:   root.calibration-modal-verifying;
+        verify-done  <=> root.calibration-modal-verify-done;
+        verify-ms:   root.calibration-modal-verify-ms;
+
+        on-cancel => {
+            root.devices-calibration-modal-show = false;
+            if root.devices-add-calibration-pending {
+                // Mantém os valores por omissão já submetidos e avança para a autenticação.
+                root.devices-add-calibrated-m       = root.devices-default-argon2-m;
+                root.devices-add-calibrated-t       = root.devices-default-argon2-t;
+                root.devices-add-calibrated-p       = root.devices-default-argon2-p;
+                root.devices-add-calibration-seq    += 1;
+                root.devices-add-calibration-pending = false;
+            }
+        }
+        on-accept(m, t, p) => {
+            if root.devices-add-calibration-pending {
+                root.devices-add-calibrated-m        = m;
+                root.devices-add-calibrated-t        = t;
+                root.devices-add-calibrated-p        = p;
+                root.devices-add-calibration-seq     += 1;
+                root.devices-add-calibration-pending = false;
+            } else {
+                root.devices-pending-calibration-m = m;
+                root.devices-pending-calibration-t = t;
+                root.devices-pending-calibration-p = p;
+            }
+            root.devices-calibration-modal-show = false;
+        }
+        on-verify(m, t, p) => { root.on-calibration-verify(m, t, p); }
+    }
+
+    // Confirm dialog
+    ConfirmDialog {
+        show:          root.confirm-show;
+        title:         root.confirm-title;
+        message:       root.confirm-message;
+        variant:       root.confirm-variant;
+        confirm-label: root.confirm-ok;
+        cancel-label:  root.confirm-cancel;
+
+        on-confirm => { root.on-confirm-ok(); }
+        on-cancel  => { root.on-confirm-cancel(); }
+    }
+
+    // Aviso de alterações não guardadas ao bloquear/sair
+    ConfirmDialog {
+        show:          root.lock-unsaved-confirm-show;
+        title:         "Alterações pendentes";
+        message:       "Há alterações pendentes. Deseja continuar (as alterações são perdidas), guardar a sessão primeiro, ou cancelar e voltar à aplicação?";
+        variant:       "warning";
+        confirm-label: "Continuar";
+        extra-label:   "Guardar";
+        cancel-label:  "Cancelar";
+        on-confirm => {
+            root.lock-unsaved-confirm-show = false;
+            if root.lock-unsaved-is-quit {
+                root.on-quit-force();
+            } else {
+                root.on-lock-force();
+            }
+        }
+        on-extra => {
+            root.lock-unsaved-confirm-show = false;
+            root.quick-save-show           = true;
+        }
+        on-cancel => {
+            root.lock-unsaved-confirm-show = false;
+            root.lock-unsaved-is-quit      = false;
+        }
+    }
+
+    // Quick-save modal - abre sem mudar de vista
+    AuthenticationModal {
+        show:       root.quick-save-show;
+        error:      root.quick-save-error;
+        hw-enabled: false;
+        on-pick-path(_kind, _current) => { "" }
+        closed => { root.quick-save-show = false; }
+        on-confirm(k1, k2, _k_ext, _xor_a, _xor_b) => {
+            root.quick-save-show = false;
+            root.on-save(
+                root.session-default-path,
+                k1, k2,
+                "", "", "",
+                true,
+            );
+        }
+    }
+
+    // Toast (alerta centrado, não bloqueia UI)
+    ToastNotification {
+        show:      root.toast-show;
+        message:   root.toast-message;
+        alert-type: root.toast-variant;
+        on-close => { root.toast-show = false; }
+    }
+
+}

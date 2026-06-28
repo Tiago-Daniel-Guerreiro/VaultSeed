@@ -1,0 +1,927 @@
+import { Button, LineEdit, ScrollView } from "std-widgets.slint";
+import { CompactButton, InputDefault, PathInputRow, FullscreenModalBase, IconCheckCircle, IconDot, Palette, PureSpinner, WindowMetrics } from "shared_components.slint";
+
+// Ponto do indicador de passo
+component StepDot inherits Rectangle {
+    in property <bool> is-active: false;
+    in property <bool> is-done: false;
+
+    width: 10px;
+    height: 10px;
+    border-radius: 5px;
+    background: is-done ? #61afef
+              : is-active ? #ffffff
+              : #444c56;
+
+    animate background { duration: 250ms; easing: ease-in-out; }
+}
+
+// Campo de input com label e erro inline
+component LabeledInput inherits VerticalLayout {
+    in property <string> label;
+    in property <string> placeholder;
+    in property <string> hint: "";
+    in property <bool>   is-secret: false;
+    in property <bool>   has-error: false;
+    in-out property <string> value <=> field.text;
+
+    // Preenche 100% da largura do pai (campo standalone num VerticalLayout).
+    width: 100%;
+    spacing: 4px;
+
+    Text {
+        text: label;
+        color: #abb2bf;
+        font-size: 12px;
+    }
+
+    field := LineEdit {
+        placeholder-text: placeholder;
+        input-type: is-secret ? InputType.password : InputType.text;
+        height: 38px;
+        min-width: 0px;
+    }
+
+    if hint != "" : Text {
+        text: hint;
+        color: has-error ? #e06c75 : #5c6370;
+        font-size: 11px;
+        wrap: word-wrap;
+    }
+}
+
+// Barra de progresso de passo
+component StepIndicator inherits HorizontalLayout {
+    in property <int>  current-step;   // 0-based
+    in property <int>  total-steps;    // ex: 10
+
+    alignment: center;
+    spacing: 8px;
+
+    for i in total-steps : HorizontalLayout {
+        spacing: 8px;
+        alignment: center;
+
+        StepDot {
+            is-active: i == current-step;
+            is-done:   i < current-step;
+        }
+
+        // Linha separadora entre pontos (excepto no último)
+        if i < total-steps - 1 : Rectangle {
+            width: 24px;
+            height: 2px;
+            background: i < current-step ? #61afef : #444c56;
+            animate background { duration: 250ms; }
+        }
+    }
+}
+
+// Painel de calibração Argon2id (reutilizado em outras páginas)
+component Argon2CalibrationPanel inherits VerticalLayout {
+    in property <string> title;
+    in property <string> subtitle;
+    in property <string> error-message: "";
+    in-out property <string> m: "";
+    in-out property <string> t: "";
+    in-out property <string> p: "";
+    in-out property <string> time-ms: "";
+    in property <bool>       calibrating: false;
+    in property <string>     next-label: "Concluir";
+    in property <string>     calibrating-message: "A calibrar para este dispositivo...";
+
+    callback on-calibrate(string /*m*/, string /*t*/, string /*p*/);
+    callback on-next(string /*m*/, string /*t*/, string /*p*/);
+    callback on-cancel();
+
+    private property <bool> first-calibration: root.m == "" && root.calibrating;
+
+    spacing: 16px;
+
+    Text {
+        text: root.title;
+        font-size: 15px;
+        font-weight: 600;
+        color: white;
+    }
+
+    Text {
+        text: root.subtitle;
+        color: #abb2bf;
+        font-size: 13px;
+        wrap: word-wrap;
+    }
+
+    // Spinner de ecrã inteiro - apenas na primeira calibração automática.
+    if root.first-calibration : VerticalLayout {
+        spacing: 12px;
+        alignment: center;
+
+        HorizontalLayout {
+            alignment: center;
+            PureSpinner { size: 32px; spinner-color: #61afef; }
+        }
+
+        Text {
+            text: root.calibrating-message;
+            color: #abb2bf;
+            font-size: 13px;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+        }
+    }
+
+    // Parâmetros editáveis + tempo - visível desde que já exista uma primeira calibração, mesmo que esteja a remedir ("Verificar tempo").
+    if !root.first-calibration : VerticalLayout {
+        spacing: 12px;
+
+        VerticalLayout {
+            spacing: 10px;
+
+            VerticalLayout {
+                spacing: 4px;
+                Text { text: "Memória (KiB)"; color: #abb2bf; font-size: 12px; }
+                LineEdit {
+                    text <=> root.m;
+                    placeholder-text: "ex: 65536";
+                    height: 36px;
+                    min-width: 0px;
+                    enabled: !root.calibrating;
+                }
+            }
+
+            VerticalLayout {
+                spacing: 4px;
+                Text { text: "Iterações"; color: #abb2bf; font-size: 12px; }
+                LineEdit {
+                    text <=> root.t;
+                    placeholder-text: "ex: 3";
+                    height: 36px;
+                    min-width: 0px;
+                    enabled: !root.calibrating;
+                }
+            }
+
+            VerticalLayout {
+                spacing: 4px;
+                Text { text: "Paralelismo"; color: #abb2bf; font-size: 12px; }
+                LineEdit {
+                    text <=> root.p;
+                    placeholder-text: "ex: 1";
+                    height: 36px;
+                    min-width: 0px;
+                    enabled: !root.calibrating;
+                }
+            }
+        }
+
+        Rectangle {
+            height: 38px;
+            border-radius: 6px;
+            background: root.calibrating ? #2b2f38 : root.time-ms != "" ? #1e3a1e : #2b2f38;
+            border-width: 1px;
+            border-color: root.calibrating ? #3e4451 : root.time-ms != "" ? #98c379 : #3e4451;
+
+            HorizontalLayout {
+                padding-left:  14px;
+                padding-right: 14px;
+                alignment: start;
+
+                Text {
+                    text: "Tempo medido:";
+                    font-size: 13px;
+                    color: #abb2bf;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+
+                if root.calibrating : Text {
+                    text: "A medir...";
+                    font-size: 13px;
+                    font-weight: 700;
+                    color: #61afef;
+                    vertical-alignment: center;
+                }
+
+                if !root.calibrating : Text {
+                    text: root.time-ms != "" ? root.time-ms : "-";
+                    font-size: 13px;
+                    font-weight: 700;
+                    color: root.time-ms != "" ? #98c379 : #5c6370;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        if root.error-message != "" : Text {
+            text: root.error-message;
+            color: #e06c75;
+            font-size: 12px;
+            wrap: word-wrap;
+        }
+    }
+
+    if WindowMetrics.avail-width >= 420px : HorizontalLayout {
+        alignment: end;
+        spacing: 8px;
+
+        Button {
+            text:    "Cancelar";
+            enabled: !root.calibrating;
+            clicked  => { root.on-cancel(); }
+        }
+
+        Button {
+            text:    "Verificar tempo";
+            enabled: !root.calibrating
+                  && root.m != ""
+                  && root.t != ""
+                  && root.p != "";
+            clicked => {
+                root.on-calibrate(root.m, root.t, root.p);
+            }
+        }
+
+        Button {
+            text:    root.next-label;
+            primary: true;
+            enabled: !root.calibrating
+                  && root.m != ""
+                  && root.t != ""
+                  && root.p != "";
+            clicked => {
+                root.on-next(root.m, root.t, root.p);
+            }
+        }
+    }
+
+    if WindowMetrics.avail-width < 420px : VerticalLayout {
+        spacing: 8px;
+
+        Button {
+            text:    root.next-label;
+            primary: true;
+            enabled: !root.calibrating
+                  && root.m != ""
+                  && root.t != ""
+                  && root.p != "";
+            clicked => {
+                root.on-next(root.m, root.t, root.p);
+            }
+        }
+
+        Button {
+            text:    "Verificar tempo";
+            enabled: !root.calibrating
+                  && root.m != ""
+                  && root.t != ""
+                  && root.p != "";
+            clicked => {
+                root.on-calibrate(root.m, root.t, root.p);
+            }
+        }
+
+        Button {
+            text:    "Cancelar";
+            enabled: !root.calibrating;
+            clicked  => { root.on-cancel(); }
+        }
+    }
+}
+
+export component TutorialModal inherits FullscreenModalBase {
+
+    // Props de controlo
+    in-out property <int> step: 0;           // Passo atual (0..9)
+
+    // Props de dados (Rust -> UI)
+    in property <string> default-session-path: "session.vaultseed";
+    in property <string> default-device-name:  "Meu_Pc";
+    in property <string> error-message:        "";
+    in property <string> generated-password:   "";
+    in property <bool>   is-loading:           false;
+    in property <string> loading-message:      "A processar...";
+
+    // Passo 2: calibração Argon2id do dispositivo
+    in-out property <string> device-m:            "65536";
+    in-out property <string> device-t:            "3";
+    in-out property <string> device-p:            "1";
+    in-out property <string> device-time-ms:      "";    // vazio = não medido
+    in property <bool>       device-calibrating:  false;
+
+    // Passo 4: calibração Argon2id da sessão
+    in-out property <string> session-m:            "65536";
+    in-out property <string> session-t:            "3";
+    in-out property <string> session-p:            "1";
+    in-out property <string> session-time-ms:      "";    // vazio = não medido
+    in property <bool>       session-calibrating:  false;
+
+    // Callbacks (UI -> Rust)
+    callback on-cancel();
+
+    // Passo 0 -> 1 VIA RUST. Atribuir root.step diretamente em Slint quebraria a ligação a tutorial-step
+    callback on-step0-next();
+
+    // Passo 1: caminho da sessão + nome do dispositivo
+    callback on-step1-confirm(string /*session_path*/, string /*device_name*/);
+    callback on-step1-override();  // Confirmar substituição de ficheiro existente
+
+    callback on-step1-acknowledge-warning();
+    in-out property <string> step1-file-warning: "";  // não vazio = ficheiro já existe
+
+    // Passo 2: calibração Argon2id do dispositivo
+    // on-device-calibrate-auto: dispara ao entrar no passo (calibra com 10s-15s)
+    callback on-device-calibrate-auto();
+    // on-device-calibrate: "Verificar tempo" manual com params actuais
+    callback on-device-calibrate(string /*m*/, string /*t*/, string /*p*/);
+    callback on-device-calibrate-next(string /*m*/, string /*t*/, string /*p*/);
+
+    // Passo 3: primeiro domínio
+    callback on-step2-confirm(string /*domain*/);
+
+    // Passo 4: calibração Argon2id da sessão
+    callback on-session-calibrate-auto();
+    callback on-session-calibrate(string /*m*/, string /*t*/, string /*p*/);
+    callback on-session-calibrate-next(string /*m*/, string /*t*/, string /*p*/);
+
+    // Passo 5: entrada de chaves mestras (sem confirmação)
+    callback on-step3-confirm(string /*k1*/, string /*k2*/);
+
+    // Passo 6: confirmação das chaves mestras - cria a sessão/dispositivo/domínio
+    callback on-step4-confirm(string /*k1_confirm*/, string /*k2_confirm*/);
+
+    // Dispara auto-calibração ao entrar nos passos 2 (dispositivo) e 4 (sessão)
+    changed step => {
+        if root.step == 2 {
+            root.device-time-ms = "";
+            root.on-device-calibrate-auto();
+        }
+        if root.step == 4 {
+            root.session-time-ms = "";
+            root.on-session-calibrate-auto();
+        }
+    }
+
+    // Passo 8: verificação - pode falhar e mostrar erro
+    callback on-step7-verify(string /*k1*/, string /*k2*/);
+    callback on-step7-restart();    // Recomeça do zero
+
+    // Passo 9: fechar modal e abrir app normal.
+    callback on-finish(string /*k1*/, string /*k2*/);
+    callback on-pick-path(string /*kind*/, string /*current*/) -> string;
+
+    // Configuração do cartão - página inteira em ecrãs estreitos (<800px)
+    overlay-color:          #00000099;
+    card-background:        #282c34;
+    card-max-width:         520px;
+    card-max-height:        720px;
+    card-height-margin:     40px;
+    card-shadow-blur:       24px;
+    card-shadow-offset-y:   8px;
+    close-on-outside-click: false;
+
+    // Cabeçalho - em ecrãs estreitos o indicador de 10 pontos força uma largura mínima maior do que o cartão, criando scroll lateral; abaixo de 800px o título encolhe e mostra o passo atual em vez do indicador.
+    property <bool> narrow-header: WindowMetrics.avail-width < 800px;
+
+            VerticalLayout {
+                spacing: 12px;
+
+                Text {
+                    text: narrow-header ? "Configuração Inicial " + (root.step + 1) + "/10" : "Configuração Inicial";
+                    font-size: narrow-header ? 13px : 20px;
+                    font-weight: 700;
+                    color: white;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                }
+
+                if !narrow-header : StepIndicator {
+                    current-step: root.step;
+                    total-steps:  10;   // Passos 0..9
+                }
+            }
+
+            // Separador
+            Rectangle { height: 1px; background: #3a3f4b; }
+
+            // PASSO 0 - Boas-vindas
+            if step == 0 : VerticalLayout {
+                spacing: 16px;
+
+                Text {
+                    text: "Bem-vindo ao VaultSeed";
+                    font-size: 17px;
+                    font-weight: 600;
+                    color: white;
+                    horizontal-alignment: center;
+                }
+
+                Text {
+                    text: "Este assistente vai guiá-lo na criação da sua\nprimeira sessão segura.\n\nNo final terá:\n  • Um ficheiro de sessão encriptado\n  • Um dispositivo associado\n  • O seu primeiro domínio configurado";
+                    color: #abb2bf;
+                    font-size: 13px;
+                    horizontal-alignment: left;
+                    wrap: word-wrap;
+                }
+
+                Rectangle {
+                    background: #2e3440;
+                    border-radius: 8px;
+                    height: 48px;
+                    border-width: 1px;
+                    border-color: #3d4455;
+
+                    HorizontalLayout {
+                        padding-left: 14px;
+                        padding-right: 14px;
+                        spacing: 10px;
+                        alignment: center;
+
+                        VerticalLayout {
+                            alignment: center;
+                            IconDot { size: 8px; icon-color: Palette.info; }
+                        }
+                        Text {
+                            text: "As suas chaves NUNCA são guardadas em disco.";
+                            color: #61afef;
+                            font-size: 12px;
+                            vertical-alignment: center;
+                            wrap: word-wrap;
+                            horizontal-stretch: 1;
+                        }
+                    }
+                }
+
+                HorizontalLayout {
+                    alignment: end;
+                    spacing: 10px;
+
+                    Button {
+                        text: "Cancelar";
+                        clicked => { root.on-cancel(); }
+                    }
+                    Button {
+                        text: "Começar";
+                        primary: true;
+                        clicked => { root.on-step0-next(); }
+                    }
+                }
+            }
+
+            // PASSO 1 - Sessão + Dispositivo
+            if step == 1 : VerticalLayout {
+                spacing: 16px;
+
+                Text {
+                    text: "Configurar sessão e dispositivo";
+                    font-size: 15px;
+                    font-weight: 600;
+                    color: white;
+                }
+
+                // Formulário normal (esconde quando ficheiro já existe)
+                if root.step1-file-warning == "" : VerticalLayout {
+                    spacing: 16px;
+
+                    session-path-input := PathInputRow {
+                        label:       "Pasta de destino";
+                        placeholder: default-session-path;
+                        hint:        "Selecione a pasta onde o ficheiro de sessão será guardado";
+                        browse => {
+                            let selected = root.on-pick-path("folder", session-path-input.value);
+                            if selected != "" {
+                                session-path-input.value = selected;
+                            }
+                        }
+                    }
+
+                    device-name-input := InputDefault {
+                        label:         "Nome deste dispositivo";
+                        default-value: default-device-name;
+                        hint:          "Nome detetado automaticamente - pode alterar";
+                    }
+
+                    if error-message != "" : Text {
+                        text: error-message;
+                        color: #e06c75;
+                        font-size: 12px;
+                        wrap: word-wrap;
+                    }
+
+                    HorizontalLayout {
+                        alignment: end;
+                        spacing: 10px;
+
+                        Button {
+                            text: "Cancelar";
+                            clicked => { root.on-cancel(); }
+                        }
+                        Button {
+                            text: "Seguinte";
+                            primary: true;
+                            clicked => {
+                                root.on-step1-confirm(
+                                    session-path-input.value,
+                                    device-name-input.value
+                                );
+                            }
+                        }
+                    }
+                }
+
+                // Painel de confirmação de sobreposição
+                if root.step1-file-warning != "" : VerticalLayout {
+                    spacing: 16px;
+
+                    Rectangle {
+                        background: #2e2714;
+                        border-radius: 8px;
+                        border-width: 1px;
+                        border-color: #e5c07b;
+
+                        VerticalLayout {
+                            padding: 14px;
+                            spacing: 8px;
+
+                            Text {
+                                text: "O ficheiro de sessão já existe";
+                                font-size: 13px;
+                                font-weight: 700;
+                                color: #e5c07b;
+                            }
+
+                            Text {
+                                text: root.step1-file-warning;
+                                font-size: 11px;
+                                color: #abb2bf;
+                                wrap: word-wrap;
+                            }
+
+                            Text {
+                                text: "Substituir irá apagar permanentemente o ficheiro existente.";
+                                font-size: 11px;
+                                color: #e06c75;
+                                wrap: word-wrap;
+                            }
+                        }
+                    }
+
+                    HorizontalLayout {
+                        alignment: end;
+                        spacing: 10px;
+
+                        Button {
+                            text: "Alterar caminho";
+                            clicked => {
+                                root.on-step1-acknowledge-warning();
+                                root.step1-file-warning = "";
+                            }
+                        }
+                        Button {
+                            text: "Substituir";
+                            primary: true;
+                            clicked => { root.on-step1-override(); }
+                        }
+                    }
+                }
+            }
+
+            // PASSO 2 - Calibração Argon2id do dispositivo
+            if step == 2 : Argon2CalibrationPanel {
+                title:    "Calibração Argon2id do dispositivo";
+                subtitle: "Estes parâmetros protegem a semente do dispositivo. Usa o tempo alvo definido nas configurações locais (por defeito, ~1 s).";
+                error-message: root.error-message;
+                next-label: "Seguinte";
+                calibrating-message: "A calibrar para este dispositivo...";
+
+                m       <=> root.device-m;
+                t       <=> root.device-t;
+                p       <=> root.device-p;
+                time-ms <=> root.device-time-ms;
+                calibrating: root.device-calibrating;
+
+                on-calibrate(m, t, p) => { root.on-device-calibrate(m, t, p); }
+                on-next(m, t, p)      => { root.on-device-calibrate-next(m, t, p); }
+                on-cancel             => { root.on-cancel(); }
+            }
+
+            // PASSO 3 - Primeiro domínio
+            if step == 3 : VerticalLayout {
+                spacing: 16px;
+
+                Text {
+                    text: "Primeiro domínio";
+                    font-size: 15px;
+                    font-weight: 600;
+                    color: white;
+                }
+
+                Text {
+                    text: "Um domínio representa um serviço para o qual\nquer gerar uma senha (ex: github.com, google.com).";
+                    color: #abb2bf;
+                    font-size: 13px;
+                    wrap: word-wrap;
+                }
+
+                domain-input := LabeledInput {
+                    label:       "Identificador do domínio";
+                    placeholder: "ex: github.com";
+                    hint:        error-message != "" ? error-message : "Use um nome único e descritivo";
+                    has-error:   error-message != "";
+                }
+
+                HorizontalLayout {
+                    alignment: end;
+                    spacing: 10px;
+
+                    Button {
+                        text: "Cancelar";
+                        clicked => { root.on-cancel(); }
+                    }
+                    Button {
+                        text: "Seguinte";
+                        primary: true;
+                        enabled: domain-input.value != "";
+                        clicked => {
+                            root.on-step2-confirm(domain-input.value);
+                        }
+                    }
+                }
+            }
+
+            // PASSO 4 - Calibração Argon2id da sessão
+            if step == 4 : Argon2CalibrationPanel {
+                title:    "Calibração Argon2id da sessão";
+                subtitle: "Os parâmetros definem o custo de derivação das chaves mestras para esta sessão. Um tempo de ~10-15 s é recomendado. Aviso: pode demorar alguns minutos.";
+                error-message: root.error-message;
+                next-label: "Seguinte";
+                calibrating-message: "A calibrar para esta sessão (alvo: ~10-15 s) - pode demorar alguns minutos, aguarde...";
+
+                m       <=> root.session-m;
+                t       <=> root.session-t;
+                p       <=> root.session-p;
+                time-ms <=> root.session-time-ms;
+                calibrating: root.session-calibrating;
+
+                on-calibrate(m, t, p) => { root.on-session-calibrate(m, t, p); }
+                on-next(m, t, p)      => { root.on-session-calibrate-next(m, t, p); }
+                on-cancel             => { root.on-cancel(); }
+            }
+
+            // PASSO 5 - Introduzir chaves mestras K1 + K2
+            if step == 5 : VerticalLayout {
+                spacing: 16px;
+
+                Text {
+                    text: "Chaves mestras";
+                    font-size: 15px;
+                    font-weight: 600;
+                    color: white;
+                }
+
+                k1-input := LabeledInput {
+                    label:       "Chave mestra K1";
+                    placeholder: "K1 - obrigatória";
+                    is-secret:   true;
+                    hint:        "Primeira componente da sua chave mestra";
+                }
+
+                k2-input := LabeledInput {
+                    label:       "Chave mestra K2";
+                    placeholder: "K2 - obrigatória";
+                    is-secret:   true;
+                    hint:        "Segunda componente. Pode ser diferente de K1.";
+                }
+
+                Text {
+                    text: "Sugestão (não obrigatório): use chaves com pelo menos 16 caracteres, combinando letras, números e símbolos, para maior segurança.";
+                    color: #5c6370;
+                    font-size: 11px;
+                    wrap: word-wrap;
+                }
+
+                Rectangle {
+                    background: #2e3440;
+                    border-radius: 8px;
+                    border-width: 1px;
+                    border-color: #3d4455;
+
+                    VerticalLayout {
+                        padding: 12px;
+
+                        Text {
+                            text: "Memorize estas chaves. Se as perder não será possível recuperar as suas senhas.";
+                            color: #e5c07b;
+                            font-size: 12px;
+                            wrap: word-wrap;
+                            horizontal-stretch: 1;
+                        }
+                    }
+                }
+
+                if error-message != "" : Text {
+                    text: error-message;
+                    color: #e06c75;
+                    font-size: 12px;
+                    wrap: word-wrap;
+                }
+
+                HorizontalLayout {
+                    alignment: end;
+                    spacing: 10px;
+
+                    Button {
+                        text: "Cancelar";
+                        clicked => { root.on-cancel(); }
+                    }
+                    Button {
+                        text: "Seguinte";
+                        primary: true;
+                        enabled: k1-input.value != "" && k2-input.value != "";
+                        clicked => {
+                            root.on-step3-confirm(k1-input.value, k2-input.value);
+                        }
+                    }
+                }
+            }
+
+            // PASSO 6 - Confirmar chaves mestras K1 + K2 (cria a sessão)
+            if step == 6 : VerticalLayout {
+                spacing: 16px;
+
+                Text {
+                    text: "Confirmar chaves mestras";
+                    font-size: 15px;
+                    font-weight: 600;
+                    color: white;
+                }
+
+                Text {
+                    text: "Introduza novamente K1 e K2 para confirmar que as memorizou corretamente.";
+                    color: #abb2bf;
+                    font-size: 13px;
+                    wrap: word-wrap;
+                }
+
+                k1-confirm-input := LabeledInput {
+                    label:       "Confirmar K1";
+                    placeholder: "Repita K1";
+                    is-secret:   true;
+                }
+
+                k2-confirm-input := LabeledInput {
+                    label:       "Confirmar K2";
+                    placeholder: "Repita K2";
+                    is-secret:   true;
+                }
+
+                if error-message != "" : Text {
+                    text: error-message;
+                    color: #e06c75;
+                    font-size: 12px;
+                    wrap: word-wrap;
+                }
+
+                HorizontalLayout {
+                    alignment: end;
+                    spacing: 10px;
+
+                    Button {
+                        text: "Cancelar";
+                        clicked => { root.on-cancel(); }
+                    }
+                    Button {
+                        text: "Criar sessão";
+                        primary: true;
+                        enabled: k1-confirm-input.value != "" && k2-confirm-input.value != "";
+                        clicked => {
+                            root.on-step4-confirm(k1-confirm-input.value, k2-confirm-input.value);
+                        }
+                    }
+                }
+            }
+
+            // PASSO 7 - A processar (loading)
+            if step == 7 : VerticalLayout {
+                spacing: 24px;
+                alignment: center;
+
+                HorizontalLayout {
+                    alignment: center;
+                    PureSpinner { size: 48px; spinner-color: #61afef; }
+                }
+
+                Text {
+                    text: loading-message;
+                    color: #abb2bf;
+                    font-size: 14px;
+                    horizontal-alignment: center;
+                    animate opacity {
+                        duration: 800ms;
+                        iteration-count: -1;
+                        easing: ease-in-out;
+                    }
+                }
+
+                Text {
+                    text: "Isto pode demorar alguns segundos\ndependendo dos parâmetros Argon2.";
+                    color: #5c6370;
+                    font-size: 12px;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                }
+            }
+
+            // PASSO 8 - Sessão criada (verificação / possível erro)
+            if step == 8 : VerticalLayout {
+                spacing: 16px;
+                alignment: center;
+
+                Text {
+                    text: "Sessão criada com sucesso!";
+                    font-size: 15px;
+                    font-weight: 600;
+                    color: #98c379;
+                    horizontal-alignment: center;
+                }
+
+                Text {
+                    text: "A sessão foi encriptada e está pronta a usar.";
+                    color: #abb2bf;
+                    font-size: 13px;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                }
+
+                if error-message != "" : Rectangle {
+                    background: #2e1f1f;
+                    border-radius: 8px;
+                    border-width: 1px;
+                    border-color: #e06c75;
+
+                    VerticalLayout {
+                        padding: 12px;
+                        spacing: 8px;
+
+                        Text {
+                            text: error-message;
+                            color: #e06c75;
+                            font-size: 12px;
+                            wrap: word-wrap;
+                        }
+
+                        Button {
+                            text: "Recomeçar tutorial";
+                            clicked => { root.on-step7-restart(); }
+                        }
+                    }
+                }
+
+                HorizontalLayout {
+                    alignment: center;
+
+                    Button {
+                        text:    "Entrar na aplicação";
+                        primary: true;
+                        clicked => { root.on-finish("", ""); }
+                    }
+                }
+            }
+
+            // PASSO 9 - Concluído
+            if step == 9 : VerticalLayout {
+                spacing: 16px;
+                alignment: center;
+
+                IconCheckCircle {
+                    size: 40px;
+                    icon-color: #98c379;
+                }
+
+                Text {
+                    text: "Sessão criada com sucesso!";
+                    font-size: 17px;
+                    font-weight: 700;
+                    color: #98c379;
+                    horizontal-alignment: center;
+                }
+
+                Text {
+                    text: "O cofre está pronto a utilizar.\nJá pode gerir dispositivos, restrições e domínios.";
+                    color: #abb2bf;
+                    font-size: 13px;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                }
+
+                HorizontalLayout {
+                    alignment: center;
+
+                    Button {
+                        text: "Entrar na aplicação";
+                        primary: true;
+                        clicked => { root.on-finish("", ""); }
+                    }
+                }
+            }
+} 

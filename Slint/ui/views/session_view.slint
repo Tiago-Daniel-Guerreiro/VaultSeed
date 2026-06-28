@@ -1,0 +1,1410 @@
+// =============================================================================
+// session_view.slint
+// Vista completa de gestão de sessão.
+// Cobre: menu_sessao, view_session_params, edit_session_params,
+//        activate_hardware_factor, deactivate_hardware_factor,
+//        create_xor_prompt, save_session_prompt, rotate_master_key_prompt
+// =============================================================================
+
+import { Button, ScrollView } from "std-widgets.slint";
+
+import {
+    Palette, Tokens, Divider, LabeledInput, MessageBanner,
+    SectionTitle, StatusBadge, KeyValueRow, EmptyState,
+    SessionPanelBase, SidebarToggle, PathInputRow, InputDefault,
+    ConfirmDialog, IconCheck, WindowMetrics,
+} from "../components/shared_components.slint";
+
+import { AuthenticationModal } from "./login_view.slint";
+
+import { SidebarBase, SidebarGroupLabel, SidebarNavItem } from "../components/sidebar_components.slint";
+
+// =============================================================================
+// STRUCTS DE DADOS
+// =============================================================================
+
+export struct SessionOverviewItem {
+    schema-version:       int,
+    salt-session-hex:     string,
+    argon2-m:             int,
+    argon2-t:             int,
+    argon2-p:             int,
+    hardware-enabled:     bool,
+    salt-hkdf-hex:        string,   // "" se hardware inativo
+    nonce-global-hex:     string,
+    ciphertext-len:       int,
+    device-count:         int,
+    restriction-count:    int,
+    domain-count:         int,
+    static-pw-count:      int,
+}
+
+export struct CalibrationResultItem {
+    m-cost:      int,
+    t-cost:      int,
+    p-cost:      int,
+    duration-ms: int,
+    within-range: bool,
+}
+
+// =============================================================================
+// (SessionNavItem substituído por SidebarNavItem de shared_components.slint)
+// =============================================================================
+
+// =============================================================================
+// PAINEL: VER PARÂMETROS - print_session_overview
+// =============================================================================
+component SessionOverviewPanel inherits VerticalLayout {
+    in property <SessionOverviewItem> overview;
+    in property <string> error: "";
+    callback on-delete-session-file();
+
+    property <bool> very-narrow: WindowMetrics.avail-width < 400px;
+
+    // alignment:start é essencial - sem isto o ScrollView pai não consegue
+    // medir a altura total do conteúdo correctamente.
+    alignment: start;
+    spacing: 12px;
+    padding: 16px;
+
+    SectionTitle {
+        title:    "Dados da sessão";
+        subtitle: "Informação técnica do ficheiro de sessão atual.";
+    }
+
+    Divider {}
+
+    // Estatísticas rápidas - 4 cartões lado a lado quando há espaço; em
+    // ecrãs muito estreitos (<400px) empilham numa coluna única com o
+    // rótulo acima do valor, em vez de espremerem-se na mesma linha.
+    if !root.very-narrow : HorizontalLayout {
+        spacing: 10px;
+
+        for stat in [
+                { label: "Dispositivos",  value: root.overview.device-count,      color: Palette.accent  },
+                { label: "Restrições",    value: root.overview.restriction-count,  color: Palette.info    },
+                { label: "Domínios",      value: root.overview.domain-count,       color: Palette.success },
+                { label: "Est. estáticas", value: root.overview.static-pw-count,  color: Palette.warning },
+        ] : Rectangle {
+            horizontal-stretch: 1;
+            min-height:    56px;
+            background:    Palette.bg-panel;
+            border-radius: 8px;
+            border-width:  1px;
+            border-color:  Palette.border;
+
+                VerticalLayout {
+                alignment: center;
+                padding:   8px;
+                spacing:   2px;
+
+                Text {
+                    text:               stat.value;
+                    font-size:          20px;
+                    font-weight:        700;
+                    color:              stat.color;
+                    horizontal-alignment: center;
+                    wrap:               word-wrap;
+                }
+
+                Text {
+                    text:               stat.label;
+                    font-size:          11px;
+                    color:              Palette.text-muted;
+                    horizontal-alignment: center;
+                    wrap:               word-wrap;
+                }
+            }
+        }
+    }
+
+    if root.very-narrow : VerticalLayout {
+        spacing: 10px;
+
+        for stat in [
+                { label: "Dispositivos",  value: root.overview.device-count,      color: Palette.accent  },
+                { label: "Restrições",    value: root.overview.restriction-count,  color: Palette.info    },
+                { label: "Domínios",      value: root.overview.domain-count,       color: Palette.success },
+                { label: "Est. estáticas", value: root.overview.static-pw-count,  color: Palette.warning },
+        ] : VerticalLayout {
+            spacing: 4px;
+
+            // Label fora do container do valor (quebra de linha própria).
+            Text {
+                text:      stat.label;
+                font-size: 11px;
+                color:     Palette.text-muted;
+            }
+
+            // Container só com o valor, centrado em altura e largura.
+            Rectangle {
+                min-height:    44px;
+                background:    Palette.bg-panel;
+                border-radius: 8px;
+                border-width:  1px;
+                border-color:  Palette.border;
+
+                Text {
+                    text:                 stat.value;
+                    font-size:            18px;
+                    font-weight:          700;
+                    color:                stat.color;
+                    horizontal-alignment: center;
+                    vertical-alignment:   center;
+                    x: (parent.width  - self.width)  / 2;
+                    y: (parent.height - self.height) / 2;
+                }
+            }
+        }
+    }
+
+    // Detalhes técnicos
+    Rectangle {
+        background:    Palette.bg-panel;
+        border-radius: 8px;
+        border-width:  1px;
+        border-color:  Palette.border;
+
+        VerticalLayout {
+            padding: 16px;
+            spacing: 8px;
+
+            Text {
+                text:        "Geral";
+                font-size:   13px;
+                font-weight: 700;
+                color:       Palette.text-muted;
+            }
+
+            Divider {}
+
+            KeyValueRow { label: "Schema version";  value: root.overview.schema-version; force-stacked: true; }
+            KeyValueRow { label: "Salt sessão";      value: root.overview.salt-session-hex; copyable: true; force-stacked: true; }
+            KeyValueRow { label: "Nonce global";     value: root.overview.nonce-global-hex; copyable: true; force-stacked: true; }
+            KeyValueRow { label: "Ciphertext";       value: root.overview.ciphertext-len + " bytes"; force-stacked: true; }
+        }
+    }
+
+    Rectangle {
+        background:    Palette.bg-panel;
+        border-radius: 8px;
+        border-width:  1px;
+        border-color:  Palette.border;
+
+        VerticalLayout {
+            padding: 16px;
+            spacing: 8px;
+
+            Text {
+                text:        "Argon2id";
+                font-size:   13px;
+                font-weight: 700;
+                color:       Palette.text-muted;
+            }
+
+            Divider {}
+
+            KeyValueRow { label: "m_cost"; value: root.overview.argon2-m + " KiB (" + root.overview.argon2-m / 1024 + " MiB)"; force-stacked: true; }
+            KeyValueRow { label: "t_cost"; value: root.overview.argon2-t; force-stacked: true; }
+            KeyValueRow { label: "p_cost"; value: root.overview.argon2-p; force-stacked: true; }
+        }
+    }
+
+    Rectangle {
+        background:    Palette.bg-panel;
+        border-radius: 8px;
+        border-width:  1px;
+        border-color:  Palette.border;
+
+        VerticalLayout {
+            padding: 16px;
+            spacing: 8px;
+
+            HorizontalLayout {
+                spacing: 8px;
+
+                Text {
+                    text:               "Fator físico";
+                    font-size:          13px;
+                    font-weight:        700;
+                    color:              Palette.text-muted;
+                    horizontal-stretch: 1;
+                    vertical-alignment: center;
+                }
+
+                StatusBadge {
+                    label:   root.overview.hardware-enabled ? "ATIVO" : "INATIVO";
+                    variant: root.overview.hardware-enabled ? "info"  : "muted";
+                }
+            }
+
+            Divider {}
+
+            if overview.hardware-enabled : KeyValueRow {
+                label:         "Salt HKDF";
+                value:         root.overview.salt-hkdf-hex;
+                copyable:      true;
+                force-stacked: true;
+            }
+
+            if !overview.hardware-enabled : Text {
+                text:      "Sem fator físico configurado.";
+                font-size: 12px;
+                color:     Palette.text-muted;
+            }
+        }
+    }
+
+    MessageBanner {
+        message: root.error;
+        variant: "error";
+    }
+
+    HorizontalLayout {
+        alignment: end;
+
+        Button {
+            text:    "Remover ficheiro de sessão";
+            clicked => { root.on-delete-session-file(); }
+        }
+    }
+}
+
+// PAINEL: EDITAR ARGON2 - edit_session_params
+component EditArgon2Panel inherits SessionPanelBase {
+    in property <int>    current-m;
+    in property <int>    current-t;
+    in property <int>    current-p;
+    in property <CalibrationResultItem> calibration-result;
+    in property <bool>   show-calibration-result: false;
+    in property <string> error: "";
+
+    // kept for Rust compat (no longer drives visibility)
+    in-out property <string> mode: "none";
+
+    callback on-calibrate(string /*target_secs*/);
+    callback on-apply-calibration();
+    callback on-apply-manual(string /*m*/, string /*t*/, string /*p*/);
+    callback on-regenerate-salt();
+
+    private property <bool> user-dismissed-calibration: false;
+
+    changed show-calibration-result => {
+        if show-calibration-result { root.user-dismissed-calibration = false; }
+    }
+
+    panel-title:    "Parâmetros Argon2id";
+    panel-subtitle: "Altera o custo de derivação da chave mestra. Guarde a sessão após alterar.";
+
+    property <bool> narrow: WindowMetrics.avail-width < 500px;
+
+    Rectangle {
+        background:    Palette.bg-panel;
+        border-radius: 8px;
+        border-width:  1px;
+        border-color:  Palette.border;
+
+        VerticalLayout {
+        if !root.narrow : HorizontalLayout {
+            padding: 14px;
+            spacing: 24px;
+            alignment: center;
+
+            VerticalLayout {
+                spacing: 2px;
+                alignment: center;
+
+                Text {
+                    text:               current-m + " KiB";
+                    font-size:          16px;
+                    font-weight:        700;
+                    color:              Palette.accent;
+                    horizontal-alignment: center;
+                }
+                Text {
+                    text:               "m_cost atual";
+                    font-size:          11px;
+                    color:              Palette.text-muted;
+                    horizontal-alignment: center;
+                }
+            }
+
+            VerticalLayout {
+                spacing: 2px;
+                alignment: center;
+
+                Text {
+                    text:               current-t;
+                    font-size:          16px;
+                    font-weight:        700;
+                    color:              Palette.info;
+                    horizontal-alignment: center;
+                }
+                Text {
+                    text:               "t_cost atual";
+                    font-size:          11px;
+                    color:              Palette.text-muted;
+                    horizontal-alignment: center;
+                }
+            }
+
+            VerticalLayout {
+                spacing: 2px;
+                alignment: center;
+
+                Text {
+                    text:               current-p;
+                    font-size:          16px;
+                    font-weight:        700;
+                    color:              Palette.success;
+                    horizontal-alignment: center;
+                }
+                Text {
+                    text:               "p_cost atual";
+                    font-size:          11px;
+                    color:              Palette.text-muted;
+                    horizontal-alignment: center;
+                }
+            }
+        }
+
+        if root.narrow : VerticalLayout {
+            padding: 14px;
+            spacing: 10px;
+
+            VerticalLayout {
+                spacing: 2px;
+                Text {
+                    text:               current-m + " KiB";
+                    font-size:          16px;
+                    font-weight:        700;
+                    color:              Palette.accent;
+                }
+                Text {
+                    text:               "m_cost atual";
+                    font-size:          11px;
+                    color:              Palette.text-muted;
+                }
+            }
+
+            VerticalLayout {
+                spacing: 2px;
+                Text {
+                    text:               current-t;
+                    font-size:          16px;
+                    font-weight:        700;
+                    color:              Palette.info;
+                }
+                Text {
+                    text:               "t_cost atual";
+                    font-size:          11px;
+                    color:              Palette.text-muted;
+                }
+            }
+
+            VerticalLayout {
+                spacing: 2px;
+                Text {
+                    text:               current-p;
+                    font-size:          16px;
+                    font-weight:        700;
+                    color:              Palette.success;
+                }
+                Text {
+                    text:               "p_cost atual";
+                    font-size:          11px;
+                    color:              Palette.text-muted;
+                }
+            }
+        }
+        }
+    }
+
+    // Definir
+    Rectangle {
+        background:    Palette.bg-panel;
+        border-radius: 8px;
+        border-width:  1px;
+        border-color:  Palette.border;
+
+        VerticalLayout {
+            padding: 16px;
+            spacing: 12px;
+
+            Text {
+                text:        "Definir";
+                font-size:   13px;
+                font-weight: 700;
+                color:       Palette.text-muted;
+            }
+
+            man-m := LabeledInput {
+                label:       "m_cost (KiB)";
+                placeholder: current-m;
+                hint:        "Mín: 65536";
+            }
+
+            man-t := LabeledInput {
+                label:       "t_cost";
+                placeholder: current-t;
+                hint:        "Mín: 3";
+            }
+
+            man-p := LabeledInput {
+                label:       "p_cost";
+                placeholder: current-p;
+                hint:        "Mín: 4";
+            }
+
+            cal-secs := InputDefault {
+                label:         "Tempo alvo para calibração (segundos)";
+                default-value: "10";
+                hint:          "Recomendado: ~10 s";
+            }
+
+            MessageBanner {
+                message: root.error;
+                variant: "error";
+            }
+
+            HorizontalLayout {
+                alignment: end;
+                spacing:   8px;
+
+                Button {
+                    text:    "Calibrar";
+                    enabled: cal-secs.value != "";
+                    clicked => { root.on-calibrate(cal-secs.value); }
+                }
+
+                Button {
+                    text:    "Aplicar";
+                    primary: true;
+                    clicked => {
+                        root.on-apply-manual(
+                            man-m.value == "" ? root.current-m : man-m.value,
+                            man-t.value == "" ? root.current-t : man-t.value,
+                            man-p.value == "" ? root.current-p : man-p.value,
+                        );
+                    }
+                }
+            }
+
+            // Resultado da calibração
+            if show-calibration-result && !user-dismissed-calibration : Rectangle {
+                background:    calibration-result.within-range ? #1a3326 : #2e2714;
+                border-radius: 6px;
+                border-width:  1px;
+                border-color:  calibration-result.within-range ? Palette.success : Palette.warning;
+
+                VerticalLayout {
+                    padding: 14px;
+                    spacing: 8px;
+
+                    VerticalLayout {
+                        spacing: 6px;
+
+                        HorizontalLayout {
+                            spacing: 12px;
+
+                            VerticalLayout {
+                                horizontal-stretch: 1;
+                                spacing: 2px;
+                                Text { text: "m_cost"; font-size: 11px; color: Palette.text-muted; overflow: elide; }
+                                Text { text: calibration-result.m-cost + " KiB"; font-size: 13px; color: Palette.text-primary; font-weight: 600; overflow: elide; }
+                            }
+
+                            VerticalLayout {
+                                horizontal-stretch: 1;
+                                spacing: 2px;
+                                Text { text: "t_cost"; font-size: 11px; color: Palette.text-muted; overflow: elide; }
+                                Text { text: calibration-result.t-cost; font-size: 13px; color: Palette.text-primary; font-weight: 600; overflow: elide; }
+                            }
+
+                            VerticalLayout {
+                                horizontal-stretch: 1;
+                                spacing: 2px;
+                                Text { text: "p_cost"; font-size: 11px; color: Palette.text-muted; overflow: elide; }
+                                Text { text: calibration-result.p-cost; font-size: 13px; color: Palette.text-primary; font-weight: 600; overflow: elide; }
+                            }
+                        }
+
+                        Text {
+                            text: "Duração: " + calibration-result.duration-ms + " ms";
+                            font-size: 12px;
+                            color: Palette.text-muted;
+                        }
+                    }
+
+                    StatusBadge {
+                        label:   calibration-result.within-range ? "Dentro do intervalo" : "Fora do intervalo";
+                        variant: calibration-result.within-range ? "success" : "warning";
+                    }
+
+                    HorizontalLayout {
+                        alignment: end;
+                        spacing:   8px;
+
+                        Button {
+                            text:    "Cancelar";
+                            clicked => { root.user-dismissed-calibration = true; }
+                        }
+
+                        Button {
+                            text:    "Aplicar resultado";
+                            primary: true;
+                            clicked => { root.on-apply-calibration(); }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Rectangle {
+        background:    #2e2714;
+        border-radius: 8px;
+        border-width:  1px;
+        border-color:  Palette.warning;
+
+        VerticalLayout {
+        if WindowMetrics.avail-width >= 400px : HorizontalLayout {
+            padding:   14px;
+            spacing:   12px;
+            alignment: start;
+
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: 2px;
+
+                Text {
+                    text:        "Regenerar salt da sessão";
+                    font-size:   13px;
+                    font-weight: 700;
+                    color:       Palette.warning;
+                }
+
+                Text {
+                    text:      "Invalida backups existentes do ficheiro de sessão.";
+                    font-size: 11px;
+                    color:     Palette.text-muted;
+                    wrap:      word-wrap;
+                }
+            }
+
+            Button {
+                text:    "Regenerar";
+                min-width: 140px;
+                clicked => { root.on-regenerate-salt(); }
+            }
+        }
+
+        if WindowMetrics.avail-width < 400px : VerticalLayout {
+            padding: 14px;
+            spacing: 10px;
+
+            Text {
+                text:        "Regenerar salt da sessão";
+                font-size:   13px;
+                font-weight: 700;
+                color:       Palette.warning;
+            }
+
+            Text {
+                text:      "Invalida backups existentes do ficheiro de sessão.";
+                font-size: 11px;
+                color:     Palette.text-muted;
+                wrap:      word-wrap;
+            }
+
+            Button {
+                text:    "Regenerar";
+                width:   100%;
+                clicked => { root.on-regenerate-salt(); }
+            }
+        }
+        }
+    }
+}
+
+component SaveSessionPanel inherits SessionPanelBase {
+    in property <string> default-path: "session.vaultseed";
+    in property <string> error: "";
+
+    callback on-pick-path(string /*kind*/, string /*current*/) -> string;
+
+    in property <string> picked-path: "";
+    in property <int>    pick-seq:    0;
+
+    changed pick-seq => {
+        if (root.picked-path != "") {
+            save-path.value = root.picked-path;
+        }
+    }
+
+    private property <bool> mark-as-default: false;
+    in-out property <bool>   show-auth:       false;
+    in-out property <string> pending-path:    "";
+    in-out property <bool>   pending-default: false;
+
+    panel-title:    "Guardar cópia de sessão";
+    panel-subtitle: "Encripta e grava o estado atual no ficheiro de sessão.";
+
+    Divider {}
+
+    save-path := PathInputRow {
+        label:       "Caminho de destino";
+        placeholder: default-path;
+        hint:        "Deixe vazio para usar o caminho padrão";
+        browse => {
+            let selected = root.on-pick-path("save-file", save-path.value);
+            if selected != "" {
+                save-path.value = selected;
+            }
+        }
+    }
+
+    // Checkbox: Marcar como padrão
+    Rectangle {
+        min-height:    44px;
+        background:    Palette.bg-panel;
+        border-radius: 6px;
+        border-width:  1px;
+        border-color:  Palette.border;
+
+        default-ta := TouchArea {
+            clicked => { root.mark-as-default = !root.mark-as-default; }
+        }
+
+        HorizontalLayout {
+            padding-left:  12px;
+            padding-right: 12px;
+            padding-top:    10px;
+            padding-bottom: 10px;
+            spacing:       10px;
+            alignment:     start;
+
+            VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    width:         18px;
+                    height:        18px;
+                    border-radius: 3px;
+                    border-width:  2px;
+                    border-color:  mark-as-default ? Palette.accent : Palette.border;
+                    background:    mark-as-default ? Palette.accent : transparent;
+                    animate background   { duration: 120ms; }
+                    animate border-color { duration: 120ms; }
+
+                    if mark-as-default : IconCheck {
+                        size:       11px;
+                        icon-color: Palette.bg-base;
+                        x: (parent.width  - self.width)  / 2;
+                        y: (parent.height - self.height) / 2;
+                    }
+                }
+            }
+
+            Text {
+                text:               "Marcar este caminho como padrão";
+                font-size:          13px;
+                color:              Palette.text-primary;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+                wrap:               word-wrap;
+            }
+        }
+    }
+
+    MessageBanner {
+        message: root.error;
+        variant: "error";
+    }
+
+    HorizontalLayout {
+        alignment: end;
+
+        Button {
+            text:    "Guardar sessão";
+            primary: true;
+            clicked => {
+                root.pending-path    = save-path.value == "" ? root.default-path : save-path.value;
+                root.pending-default = root.mark-as-default;
+                root.show-auth       = true;
+            }
+        }
+    }
+}
+component HardwareFactorPanel inherits SessionPanelBase {
+    in property <bool>   hardware-enabled: false;
+    in property <string> default-path:     "session.vaultseed";
+    in property <string> error:            "";
+
+    // "file" | "hex" | "new"
+    in-out property <string> kext-source: "file";
+
+    // Seletor de ficheiro assíncrono (Android/SAF)
+    in property <string> picked-path: "";
+    in property <int>    pick-seq:    0;
+    callback on-pick-path(string /*kind*/, string /*current*/) -> string;
+
+    // Estado para auth modals elevados ao root de SessionView
+    in-out property <bool>   show-activate-auth:   false;
+    in-out property <bool>   show-deactivate-auth:  false;
+    in-out property <string> pending-kext:          "";
+    in-out property <string> pending-kext-source:   "";
+
+    changed kext-source => { root.pending-kext = ""; }
+
+    property <bool> narrow: WindowMetrics.avail-width < 500px;
+
+    panel-title:    "Fator físico (K_ext)";
+    panel-subtitle: hardware-enabled ? "O fator físico está ativo. Pode desativá-lo abaixo." : "Adiciona uma segunda camada de proteção baseada num ficheiro físico.";
+
+    // Badge de estado - estado (ATIVO/INATIVO) sempre na sua própria linha, separado da descrição.
+    Rectangle {
+        background:    hardware-enabled ? #1a2e40 : #2e1a1a;
+        border-radius: 8px;
+        border-width:  1px;
+        border-color:  hardware-enabled ? Palette.info : Palette.danger;
+
+        VerticalLayout {
+            padding: 14px;
+            spacing: 4px;
+
+            Text {
+                text:               hardware-enabled ? "ATIVO" : "INATIVO";
+                font-size:          16px;
+                font-weight:        700;
+                color:              hardware-enabled ? Palette.info : Palette.danger;
+            }
+
+            Text {
+                text:               hardware-enabled ? "Fator físico ATIVO - necessário para abrir a sessão" : "Fator físico INATIVO - protecção apenas por K1/K2";
+                font-size:          13px;
+                color:              hardware-enabled ? Palette.info : Palette.text-muted;
+                wrap:               word-wrap;
+            }
+        }
+    }
+
+    Divider {}
+
+    // Ativar 
+    if !hardware-enabled : VerticalLayout {
+        spacing: 16px;
+
+        MessageBanner {
+            message: "ATENÇÃO: Se perder o ficheiro K_ext a sessão ficará permanentemente inacessível.";
+            variant: "warning";
+        }
+
+        // Selector de fonte do K_ext - em colunas (lado a lado) quando há largura suficiente; em linhas separadas em ecrãs estreitos.
+        if !root.narrow : HorizontalLayout {
+            spacing: 6px;
+
+            for opt in [
+                { id: "file", label: "Ficheiro existente" },
+                { id: "hex",  label: "Hex manual"         },
+                { id: "new",  label: "Criar novo"         },
+            ] : Rectangle {
+                horizontal-stretch: 1;
+                height:        36px;
+                border-radius: 6px;
+                border-width:  1px;
+                border-color:  kext-source == opt.id ? Palette.accent : Palette.border;
+                background:    kext-source == opt.id ? Palette.bg-active : Palette.bg-input;
+                animate border-color { duration: 120ms; }
+                animate background   { duration: 120ms; }
+
+                opt-ta := TouchArea { clicked => { root.kext-source = opt.id; } }
+
+                Text {
+                    text:               opt.label;
+                    font-size:          11px;
+                    font-weight:        kext-source == opt.id ? 700 : 400;
+                    color:              kext-source == opt.id ? Palette.accent : Palette.text-muted;
+                    horizontal-alignment: center;
+                    vertical-alignment:   center;
+                    animate color { duration: 120ms; }
+                }
+            }
+        }
+
+        if root.narrow : VerticalLayout {
+            spacing: 6px;
+
+            for opt in [
+                { id: "file", label: "Ficheiro existente" },
+                { id: "hex",  label: "Hex manual"         },
+                { id: "new",  label: "Criar novo"         },
+            ] : Rectangle {
+                height:        36px;
+                border-radius: 6px;
+                border-width:  1px;
+                border-color:  kext-source == opt.id ? Palette.accent : Palette.border;
+                background:    kext-source == opt.id ? Palette.bg-active : Palette.bg-input;
+                animate border-color { duration: 120ms; }
+                animate background   { duration: 120ms; }
+
+                opt-ta-n := TouchArea { clicked => { root.kext-source = opt.id; } }
+
+                Text {
+                    text:                   opt.label;
+                    font-size:              12px;
+                    font-weight:            kext-source == opt.id ? 700 : 400;
+                    color:                  kext-source == opt.id ? Palette.accent : Palette.text-muted;
+                    horizontal-alignment:   center;
+                    vertical-alignment:     center;
+                    animate color { duration: 120ms; }
+                }
+            }
+        }
+
+        if kext-source == "file" : PathInputRow {
+            value <=> root.pending-kext;
+            label:       "Caminho do ficheiro K_ext";
+            placeholder: "/caminho/para/kext.bin";
+            hint:        "Ficheiro binário de exatamente 32 bytes";
+            browse => {
+                let p = root.on-pick-path("open-file", root.pending-kext);
+                if p != "" { root.pending-kext = p; }
+            }
+        }
+
+        if kext-source == "hex" : LabeledInput {
+            value <=> root.pending-kext;
+            label:       "K_ext (hex 64 caracteres = 32 bytes)";
+            placeholder: "0000...0000";
+            hint:        "String hexadecimal de 64 caracteres";
+        }
+
+        if kext-source == "new" : PathInputRow {
+            value <=> root.pending-kext;
+            label:       "Caminho para guardar o novo K_ext";
+            placeholder: "/caminho/para/kext.bin";
+            hint:        "Será gerado um ficheiro aleatório de 32 bytes neste caminho";
+            browse => {
+                let p = root.on-pick-path("save-file", root.pending-kext);
+                if p != "" { root.pending-kext = p; }
+            }
+        }
+
+        MessageBanner {
+            message: root.error;
+            variant: "error";
+        }
+
+        HorizontalLayout {
+            alignment: end;
+
+            Button {
+                text:    "Ativar fator físico";
+                primary: true;
+                enabled: root.pending-kext != "";
+                clicked => {
+                    root.pending-kext-source = root.kext-source;
+                    root.show-activate-auth  = true;
+                }
+            }
+        }
+    }
+
+    // Desativar
+    if hardware-enabled : VerticalLayout {
+        spacing: 16px;
+
+        MessageBanner {
+            message: "Desativar reduz a segurança - a sessão ficará protegida apenas por K1/K2.";
+            variant: "warning";
+        }
+
+        MessageBanner {
+            message: root.error;
+            variant: "error";
+        }
+
+        HorizontalLayout {
+            alignment: end;
+
+            Button {
+                text:    "Desativar fator físico";
+                clicked => { root.show-deactivate-auth = true; }
+            }
+        }
+    }
+}
+
+component XorFilesPanel inherits SessionPanelBase {
+    in property <string> error:   "";
+    in property <string> success: "";
+
+    in property <bool> is-wasm: false;
+    in property <bool> xor-a-loaded: false;
+    in property <bool> xor-b-loaded: false;
+    in-out property <bool> show-auth: false;
+    in-out property <string> pending-path-a <=> xor-path-a.value;
+    in-out property <string> pending-path-b <=> xor-path-b.value;
+
+    callback on-create(
+        string, /*path_a*/
+        string, /*path_b*/
+        string, /*k1*/
+        string  /*k2*/
+    );
+
+    callback on-verify(string /*path_a*/, string /*path_b*/);
+    callback on-verify-loaded();
+    callback on-pick-xor-file(string /*which: "a"|"b"*/);
+    callback on-pick-path(string /*kind*/, string /*current*/) -> string;
+
+    panel-title:    "Ficheiros XOR";
+    panel-subtitle: "Divide K1 e K2 em dois ficheiros. Ambos são necessários para reconstituir as chaves.";
+
+    MessageBanner {
+        message: "Os dois ficheiros devem ser guardados em locais separados (ex: disco interno + pen USB).";
+        variant: "info";
+    }
+
+    Divider {}
+
+    xor-path-a := PathInputRow {
+        label:       root.is-wasm ? "Nome do ficheiro - Share A" : "Caminho - Share A";
+        placeholder: root.is-wasm ? "share_a.bin" : "/home/user/share_a.bin";
+        hint:        "Primeiro ficheiro XOR";
+        browse => {
+            let p = root.on-pick-path("save-file", xor-path-a.value);
+            if p != "" { xor-path-a.value = p; }
+        }
+    }
+
+    xor-path-b := PathInputRow {
+        label:       root.is-wasm ? "Nome do ficheiro - Share B" : "Caminho - Share B";
+        placeholder: root.is-wasm ? "share_b.bin" : "/media/usb/share_b.bin";
+        hint:        "Segundo ficheiro XOR (local diferente)";
+        browse => {
+            let p = root.on-pick-path("save-file", xor-path-b.value);
+            if p != "" { xor-path-b.value = p; }
+        }
+    }
+
+    if root.is-wasm : VerticalLayout {
+        spacing: 8px;
+
+        MessageBanner {
+            message: "Para verificar/recuperar, carrega os dois ficheiros que tinhas descarregado anteriormente.";
+            variant: "info";
+        }
+
+        HorizontalLayout {
+            spacing: 8px;
+
+            Button {
+                text:    root.xor-a-loaded ? "Share A carregado ✓" : "Carregar Share A…";
+                clicked => { root.on-pick-xor-file("a"); }
+            }
+            Button {
+                text:    root.xor-b-loaded ? "Share B carregado ✓" : "Carregar Share B…";
+                clicked => { root.on-pick-xor-file("b"); }
+            }
+        }
+    }
+
+    MessageBanner {
+        message: root.success;
+        variant: "success";
+    }
+
+    MessageBanner {
+        message: root.error;
+        variant: "error";
+    }
+
+    HorizontalLayout {
+        spacing:   8px;
+        alignment: end;
+
+        Button {
+            text:    "Verificar";
+            enabled: root.is-wasm ? (root.xor-a-loaded && root.xor-b-loaded) : (xor-path-a.value != "" && xor-path-b.value != "");
+            clicked => {
+                if root.is-wasm {
+                    root.on-verify-loaded();
+                } else {
+                    root.on-verify(xor-path-a.value, xor-path-b.value);
+                }
+            }
+        }
+
+        Button {
+            text:    "Criar ficheiros XOR";
+            primary: true;
+            enabled: xor-path-a.value != "" && xor-path-b.value != "" && xor-path-a.value != xor-path-b.value;
+            clicked => { root.show-auth = true; }
+        }
+    }
+}
+
+component RotateKeysPanel inherits SessionPanelBase {
+    in property <string> default-path: "session.vaultseed";
+    in property <string> error:        "";
+
+    callback on-rotate(
+        string, /*old_k1*/
+        string, /*old_k2*/
+        string, /*new_k1*/
+        string, /*new_k2*/
+        string, /*confirm_k1*/
+        string, /*confirm_k2*/
+        string  /*save_path*/
+    );
+
+    panel-title:    "Rotacionar K1/K2";
+    panel-subtitle: "Reencripta as seeds com novas chaves. As senhas derivadas NÃO mudam.";
+
+    in-out property <bool>   show-auth:      false;
+    in-out property <bool>   show-confirm:   false;
+    in-out property <string> pending-old-k1: "";
+    in-out property <string> pending-old-k2: "";
+
+    Divider {}
+
+    MessageBanner {
+        message: "ATENÇÃO: As chaves antigas deixam de funcionar imediatamente após guardar.";
+        variant: "warning";
+    }
+
+    MessageBanner {
+        message: root.error;
+        variant: "error";
+    }
+
+    HorizontalLayout {
+        alignment: end;
+
+        Button {
+            text:    "Rotacionar chaves";
+            primary: true;
+            clicked => { root.show-auth = true; }
+        }
+    }
+
+}
+
+export component SessionView inherits Rectangle {
+    width:      100%;
+    height:     100%;
+    background: Palette.bg-base;
+
+    // Dados vindos do Rust
+    in property <SessionOverviewItem>    overview;
+    in property <CalibrationResultItem>  calibration-result;
+    in property <bool>                   show-calibration-result: false;
+    in property <string>                 default-path: "session.vaultseed";
+
+    // Erros por painel
+    in property <string> error-argon2:    "";
+    in property <string> error-save:      "";
+    in property <string> error-hardware:  "";
+    in property <string> error-xor:       "";
+    in property <string> success-xor:     "";
+    in property <string> error-rotate:    "";
+    in property <string> error-delete-session: "";
+    in property <bool>   is-wasm:         false;
+    in property <bool>   xor-a-loaded:    false;
+    in property <bool>   xor-b-loaded:    false;
+
+    // Painel activo interno: 0..5
+    // 0 = Ver parâmetros | 1 = Argon2 | 2 = Guardar
+    // 3 = Fator físico   | 4 = XOR    | 5 = Rotação
+    in-out property <int> active-panel: 0;
+
+    // Estado para os AuthenticationModal ao nível do root (overlay correto)
+    private property <bool>   rotate-show-auth:    false;
+    private property <bool>   rotate-show-step-info: false;
+    private property <bool>   rotate-show-confirm: false;
+    private property <string> rotate-pending-k1:   "";
+    private property <string> rotate-pending-k2:   "";
+
+    private property <bool>   save-show-auth:    false;
+    private property <string> save-pending-path: "";
+    private property <bool>   save-pending-mark: false;
+
+    private property <bool>   hw-activate-show:   false;
+    private property <bool>   hw-deactivate-show:  false;
+    private property <string> hw-pending-kext:     "";
+    private property <string> hw-pending-kext-src: "";
+
+    private property <bool>   xor-show-auth:    false;
+    private property <string> xor-pending-path-a: "";
+    private property <string> xor-pending-path-b: "";
+
+    // Responsividade - sub-sidebar colapsa em ecrã estreito (mobile)
+    in property <length> avail-width: 1000px;
+
+    // Resultado assíncrono do seletor de ficheiros (Android/SAF) - encaminhado
+    // para o SaveSessionPanel, que actualiza o campo certo via pick-target.
+    in property <string> picked-path: "";
+    in property <int>    pick-seq:    0;
+
+    // Callbacks -> Rust
+    callback on-calibrate(string /*target_secs*/);
+    callback on-apply-calibration();
+    callback on-apply-manual-argon2(string /*m*/, string /*t*/, string /*p*/);
+    callback on-regenerate-salt();
+    callback on-save(string, string, string, string, string, string, bool);
+    callback on-activate-hardware(string, string, string, string, string);
+    callback on-deactivate-hardware(string, string, string);
+    callback on-create-xor(string, string, string, string);
+    callback on-verify-xor(string, string);
+    callback on-verify-xor-loaded();
+    callback on-pick-xor-file(string /*which: "a"|"b"*/);
+    callback on-rotate-keys(string, string, string, string, string, string, string);
+    callback on-delete-session-file();
+    callback on-pick-path(string /*kind*/, string /*current*/) -> string;
+
+    // LAYOUT PRINCIPAL
+    HorizontalLayout {
+        spacing: 0px;
+
+        // SIDEBAR INTERNA (responsiva)
+        session-sidebar := SidebarBase {
+            avail-width: root.avail-width;
+            title:       "Sessão";
+
+            if !session-sidebar.narrow || !session-sidebar.minimized : VerticalLayout {
+                spacing: 6px;
+                alignment: start;
+                padding: 8px;
+
+                SidebarGroupLabel { label: "SESSÃO"; }
+                SidebarNavItem {
+                    label:   "Ver parâmetros";
+                    active:  root.active-panel == 0;
+                    clicked => { root.active-panel = 0; if session-sidebar.narrow { session-sidebar.minimized = true; } }
+                }
+                SidebarNavItem {
+                    label:   "Argon2id";
+                    active:  root.active-panel == 1;
+                    clicked => { root.active-panel = 1; if session-sidebar.narrow { session-sidebar.minimized = true; } }
+                }
+                SidebarNavItem {
+                    label:   "Guardar";
+                    active:  root.active-panel == 2;
+                    clicked => { root.active-panel = 2; if session-sidebar.narrow { session-sidebar.minimized = true; } }
+                }
+
+                Divider {}
+
+                SidebarGroupLabel { label: "SEGURANÇA"; }
+                SidebarNavItem {
+                    label:   "Fator físico";
+                    active:  root.active-panel == 3;
+                    clicked => { root.active-panel = 3; if session-sidebar.narrow { session-sidebar.minimized = true; } }
+                }
+                SidebarNavItem {
+                    label:   "Ficheiros XOR";
+                    active:  root.active-panel == 4;
+                    clicked => { root.active-panel = 4; if session-sidebar.narrow { session-sidebar.minimized = true; } }
+                }
+                SidebarNavItem {
+                    label:   "Rotacionar K1/K2";
+                    active:  root.active-panel == 5;
+                    clicked => { root.active-panel = 5; if session-sidebar.narrow { session-sidebar.minimized = true; } }
+                }
+            }
+        }
+
+        // ÁREA DE CONTEÚDO
+        ScrollView {
+            horizontal-stretch: 1;
+            vertical-stretch:   1;
+
+            VerticalLayout {
+                alignment: start;
+                if active-panel == 0 : SessionOverviewPanel {
+                    overview: root.overview;
+                    error:    root.error-delete-session;
+                    on-delete-session-file => { root.on-delete-session-file(); }
+                }
+
+                if active-panel == 1 : EditArgon2Panel {
+                    current-m:               root.overview.argon2-m;
+                    current-t:               root.overview.argon2-t;
+                    current-p:               root.overview.argon2-p;
+                    calibration-result:      root.calibration-result;
+                    show-calibration-result: root.show-calibration-result;
+                    error:                   root.error-argon2;
+
+                    on-calibrate(secs)          => { root.on-calibrate(secs); }
+                    on-apply-calibration        => { root.on-apply-calibration(); }
+                    on-apply-manual(m, t, p)    => { root.on-apply-manual-argon2(m, t, p); }
+                    on-regenerate-salt          => { root.on-regenerate-salt(); }
+                }
+
+                if active-panel == 2 : SaveSessionPanel {
+                    default-path:     root.default-path;
+                    error:            root.error-save;
+                    picked-path:      root.picked-path;
+                    pick-seq:         root.pick-seq;
+                    show-auth        <=> root.save-show-auth;
+                    pending-path     <=> root.save-pending-path;
+                    pending-default  <=> root.save-pending-mark;
+                    on-pick-path(kind, current) => { root.on-pick-path(kind, current) }
+                }
+
+                if active-panel == 3 : HardwareFactorPanel {
+                    hardware-enabled:     root.overview.hardware-enabled;
+                    default-path:         root.default-path;
+                    error:                root.error-hardware;
+                    show-activate-auth   <=> root.hw-activate-show;
+                    show-deactivate-auth <=> root.hw-deactivate-show;
+                    pending-kext         <=> root.hw-pending-kext;
+                    pending-kext-source  <=> root.hw-pending-kext-src;
+                    on-pick-path(kind, current) => { root.on-pick-path(kind, current) }
+                }
+
+                if active-panel == 4 : XorFilesPanel {
+                    error:        root.error-xor;
+                    success:      root.success-xor;
+                    is-wasm:      root.is-wasm;
+                    xor-a-loaded: root.xor-a-loaded;
+                    xor-b-loaded: root.xor-b-loaded;
+                    show-auth       <=> root.xor-show-auth;
+                    pending-path-a  <=> root.xor-pending-path-a;
+                    pending-path-b  <=> root.xor-pending-path-b;
+                    on-pick-path(kind, current) => { root.on-pick-path(kind, current) }
+
+                    on-verify(a, b)   => { root.on-verify-xor(a, b); }
+                    on-verify-loaded  => { root.on-verify-xor-loaded(); }
+                    on-pick-xor-file(which) => { root.on-pick-xor-file(which); }
+                }
+
+                if active-panel == 5 : RotateKeysPanel {
+                    default-path:      root.default-path;
+                    error:             root.error-rotate;
+                    show-auth      <=> root.rotate-show-auth;
+                    show-confirm   <=> root.rotate-show-confirm;
+                    pending-old-k1 <=> root.rotate-pending-k1;
+                    pending-old-k2 <=> root.rotate-pending-k2;
+
+                    on-rotate(ok1, ok2, nk1, nk2, ck1, ck2, path) => {
+                        root.on-rotate-keys(ok1, ok2, nk1, nk2, ck1, ck2, path);
+                    }
+                }
+            }
+        }
+    }
+
+    // Modais de autenticação ao nível do root para overlay correto sobre toda a vista
+    AuthenticationModal {
+        show:       root.save-show-auth;
+        error:      root.error-save;
+        hw-enabled: false;
+        overlay-extend-top: Tokens.header-height;
+        on-pick-path(_kind, _current) => { "" }
+        closed => { root.save-show-auth = false; }
+        on-confirm(k1, k2, _k_ext, _xor_a, _xor_b) => {
+            root.save-show-auth = false;
+            root.on-save(root.save-pending-path, k1, k2, "", "", "", root.save-pending-mark);
+        }
+    }
+
+    AuthenticationModal {
+        show:       root.hw-activate-show;
+        error:      root.error-hardware;
+        hw-enabled: false;
+        overlay-extend-top: Tokens.header-height;
+        on-pick-path(_kind, _current) => { "" }
+        closed => { root.hw-activate-show = false; }
+        on-confirm(k1, k2, _k_ext, _xor_a, _xor_b) => {
+            root.hw-activate-show = false;
+            root.on-activate-hardware(
+                root.hw-pending-kext,
+                root.hw-pending-kext-src,
+                root.default-path,
+                k1,
+                k2,
+            );
+        }
+    }
+
+    AuthenticationModal {
+        show:       root.hw-deactivate-show;
+        error:      root.error-hardware;
+        hw-enabled: false;
+        overlay-extend-top: Tokens.header-height;
+        on-pick-path(_kind, _current) => { "" }
+        closed => { root.hw-deactivate-show = false; }
+        on-confirm(k1, k2, _k_ext, _xor_a, _xor_b) => {
+            root.hw-deactivate-show = false;
+            root.on-deactivate-hardware(root.default-path, k1, k2);
+        }
+    }
+
+    AuthenticationModal {
+        show:       root.xor-show-auth;
+        error:      root.error-xor;
+        hw-enabled: false;
+        overlay-extend-top: Tokens.header-height;
+        on-pick-path(_kind, _current) => { "" }
+        closed => { root.xor-show-auth = false; }
+        on-confirm(k1, k2, _k_ext, _xor_a, _xor_b) => {
+            root.xor-show-auth = false;
+            root.on-create-xor(
+                root.xor-pending-path-a,
+                root.xor-pending-path-b,
+                k1,
+                k2,
+            );
+        }
+    }
+
+    AuthenticationModal {
+        show:       root.rotate-show-auth;
+        error:      root.error-rotate;
+        hw-enabled: false;
+        overlay-extend-top: Tokens.header-height;
+        on-pick-path(_kind, _current) => { "" }
+        closed => { root.rotate-show-auth = false; }
+        on-confirm(k1, k2, _k_ext, _xor_a, _xor_b) => {
+            root.rotate-pending-k1     = k1;
+            root.rotate-pending-k2     = k2;
+            root.rotate-show-auth      = false;
+            root.rotate-show-step-info = true;
+        }
+    }
+
+    ConfirmDialog {
+        show:          root.rotate-show-step-info;
+        title:         "Novas chaves";
+        message:       "Clique para continuar e introduza os novos valores para K1 e K2.";
+        variant:       "info";
+        confirm-label: "Continuar";
+        cancel-label:  "Cancelar";
+        overlay-extend-top: Tokens.header-height;
+        on-cancel  => { root.rotate-show-step-info = false; }
+        on-confirm => {
+            root.rotate-show-step-info = false;
+            root.rotate-show-confirm   = true;
+        }
+    }
+
+    AuthenticationModal {
+        show:       root.rotate-show-confirm;
+        error:      root.error-rotate;
+        hw-enabled: false;
+        overlay-extend-top: Tokens.header-height;
+        on-pick-path(_kind, _current) => { "" }
+        closed => { root.rotate-show-confirm = false; }
+        on-confirm(k1, k2, _k_ext, _xor_a, _xor_b) => {
+            root.rotate-show-confirm = false;
+            root.on-rotate-keys(
+                root.rotate-pending-k1,
+                root.rotate-pending-k2,
+                k1, k2, k1, k2,
+                root.default-path,
+            );
+        }
+    }
+}

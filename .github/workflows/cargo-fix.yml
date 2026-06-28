@@ -1,0 +1,64 @@
+name: "Cargo Fix"
+
+on:
+  workflow_dispatch:
+
+jobs:
+  cargo-fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-registry-${{ runner.os }}-v1
+
+      - name: Run cargo fix
+        run: |
+          set -e
+          cargo fix --workspace --all-targets
+          # Run check to ensure fixes didn't break the build
+          cargo check --workspace --all-targets
+        shell: bash
+
+      - name: Create branch & commit fixes (if any)
+        id: commit
+        run: |
+          set -e
+          if git status --porcelain | grep -q .; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            BRANCH=auto/cargo-fix-$(date -u +%Y%m%d%H%M%S)
+            git checkout -b "$BRANCH"
+            git add -A
+            git commit -m "chore: apply cargo fix (automated)"
+            git push --set-upstream origin "$BRANCH"
+            echo "created_branch=$BRANCH" >> $GITHUB_OUTPUT
+          else
+            echo "no_changes=true" >> $GITHUB_OUTPUT
+          fi
+        shell: bash
+
+      - name: Create Pull Request
+        if: steps.commit.outputs.no_changes != 'true'
+        uses: peter-evans/create-pull-request@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "chore: apply cargo fix (automated)"
+          branch: ${{ steps.commit.outputs.created_branch }}
+          title: "chore: apply cargo fix"
+          body: |
+            This PR applies automated `cargo fix` suggestions.
+            Please review and run CI before merging.
+          labels: automated, maintenance

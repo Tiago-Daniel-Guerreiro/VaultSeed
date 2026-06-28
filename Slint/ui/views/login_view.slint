@@ -1,0 +1,614 @@
+import { Button, ScrollView } from "std-widgets.slint";
+
+import {
+    Palette, Divider, LabeledInput, MessageBanner,
+    StatusBadge, PathInputRow, InputDefault, IconDot, IconWarning, IconGear,
+    FullscreenModalBase, Tokens,
+} from "../components/shared_components.slint";
+
+export component AuthenticationModal inherits FullscreenModalBase {
+    in property <string> error:      "";
+    in property <bool>   hw-enabled: false;
+    in property <bool>   is-wasm:    false;
+
+    // Encaminhamento do seletor de ficheiros assíncrono (ver LoginView).
+    in property <string> picked-path: "";
+    in property <int>    pick-seq:    0;
+    in-out property <string> pick-target: "";
+
+    // Carregamento de ficheiros XOR por bytes (browser, sem caminho de disco).
+    in property <bool> xor-a-loaded: false;
+    in property <bool> xor-b-loaded: false;
+    callback on-pick-xor-file-login(string /*which: "a"|"b"*/);
+
+    callback on-pick-path(string /*kind*/, string /*current*/) -> string;
+    callback on-confirm(
+        string, /*k1*/
+        string, /*k2*/
+        string, /*k_ext*/
+        string, /*xor_path_a*/
+        string  /*xor_path_b*/
+    );
+
+    private property <string> keys-mode: "manual";
+    private property <int>    xor-step:  1;
+
+    private property <string> xor-a-val: "";
+    private property <string> xor-b-val: "";
+    private property <string> kext-val:  "";
+
+    card-border-width: 1px;
+
+    property <int> local-pick-seq <=> root.pick-seq;
+    changed local-pick-seq => {
+        if (root.picked-path != "") {
+            if (root.pick-target == "xor-a")      { root.xor-a-val = root.picked-path; }
+            else if (root.pick-target == "xor-b") { root.xor-b-val = root.picked-path; }
+            else if (root.pick-target == "kext")  { root.kext-val  = root.picked-path; }
+        }
+    }
+
+    if root.show : VerticalLayout {
+        padding: 0;
+        spacing: 12px;
+
+        // Título (dinâmico em modo XOR com fator físico)
+        Text {
+            text: keys-mode == "xor" && hw-enabled  ? "Autenticação (" + xor-step + "/2)" : "Autenticação";
+            font-size:            16px;
+            font-weight:          700;
+            color:                Palette.text-heading;
+            horizontal-alignment: center;
+        }
+
+        // Indicador de passo (apenas XOR + fator físico)
+        if keys-mode == "xor" && hw-enabled : HorizontalLayout {
+            alignment: center;
+            spacing:   6px;
+            height:    10px;
+
+            Rectangle {
+                width:         xor-step == 1 ? 20px : 8px;
+                height:        8px;
+                border-radius: 4px;
+                background:    xor-step == 1 ? Palette.accent : Palette.text-muted;
+                animate width      { duration: 200ms; easing: ease-in-out; }
+                animate background { duration: 150ms; }
+            }
+            Rectangle {
+                width:         xor-step == 2 ? 20px : 8px;
+                height:        8px;
+                border-radius: 4px;
+                background:    xor-step == 2 ? Palette.accent : Palette.text-muted;
+                animate width      { duration: 200ms; easing: ease-in-out; }
+                animate background { duration: 150ms; }
+            }
+        }
+
+        Divider {}
+
+        // Tabs: Manual | XOR
+        HorizontalLayout {
+            spacing: 6px;
+
+            Rectangle {
+                horizontal-stretch: 1;
+                height:        32px;
+                border-radius: 6px;
+                border-width:  1px;
+                border-color:  keys-mode == "manual" ? Palette.accent : Palette.border;
+                background:    keys-mode == "manual" ? Palette.bg-active : Palette.bg-input;
+                animate border-color { duration: 120ms; }
+                animate background   { duration: 120ms; }
+
+                TouchArea { clicked => { root.keys-mode = "manual"; } }
+
+                HorizontalLayout {
+                    alignment: center;
+                    Text {
+                        text:        "Manual";
+                        font-size:   11px;
+                        font-weight: keys-mode == "manual" ? 700 : 400;
+                        color:       keys-mode == "manual" ? Palette.accent : Palette.text-muted;
+                        vertical-alignment: center;
+                        animate color { duration: 120ms; }
+                    }
+                }
+            }
+
+            Rectangle {
+                horizontal-stretch: 1;
+                height:        32px;
+                border-radius: 6px;
+                border-width:  1px;
+                border-color:  keys-mode == "xor" ? Palette.accent : Palette.border;
+                background:    keys-mode == "xor" ? Palette.bg-active : Palette.bg-input;
+                animate border-color { duration: 120ms; }
+                animate background   { duration: 120ms; }
+
+                TouchArea { clicked => { root.keys-mode = "xor"; } }
+
+                HorizontalLayout {
+                    alignment: center;
+                    Text {
+                        text:        "Ficheiros XOR";
+                        font-size:   11px;
+                        font-weight: keys-mode == "xor" ? 700 : 400;
+                        color:       keys-mode == "xor" ? Palette.accent : Palette.text-muted;
+                        vertical-alignment: center;
+                        animate color { duration: 120ms; }
+                    }
+                }
+            }
+        }
+
+        // K1 e K2 (modo manual) - destruídos quando show=false -> limpa segredos
+        k1-input := LabeledInput {
+            visible:     keys-mode == "manual";
+            height:      keys-mode == "manual" ? self.preferred-height : 0px;
+            label:       "Chave mestra K1";
+            placeholder: "Introduza K1";
+            is-secret:   true;
+        }
+
+        k2-input := LabeledInput {
+            visible:     keys-mode == "manual";
+            height:      keys-mode == "manual" ? self.preferred-height : 0px;
+            label:       "Chave mestra K2";
+            placeholder: "Introduza K2";
+            is-secret:   true;
+        }
+
+        // XOR share A - passo 1 (ou XOR sem fator físico)
+        xor-a-row := HorizontalLayout {
+            property <bool> show-row: keys-mode == "xor" && (!hw-enabled || xor-step == 1);
+            visible: show-row;
+            height:  show-row ? xor-a.preferred-height : 0px;
+
+            xor-a := PathInputRow {
+                horizontal-stretch: 1;
+                value <=> root.xor-a-val;
+                label:       root.is-wasm ? "Ficheiro - Share A" : "Caminho - Share A";
+                placeholder: root.is-wasm ? (root.xor-a-loaded ? "Ficheiro carregado" : "Escolher ficheiro...") : "ex: /home/user/share_a.bin";
+                locked:      root.is-wasm;
+                locked-text: root.xor-a-loaded ? "Ficheiro carregado" : "Nenhum ficheiro escolhido";
+                browse => {
+                    if root.is-wasm {
+                        root.on-pick-xor-file-login("a");
+                    } else {
+                        root.pick-target = "xor-a";
+                        let selected = root.on-pick-path("open-file", root.xor-a-val);
+                        if selected != "" { root.xor-a-val = selected; }
+                    }
+                }
+            }
+        }
+
+        // XOR share B - passo 1 (ou XOR sem fator físico)
+        xor-b-row := HorizontalLayout {
+            property <bool> show-row: keys-mode == "xor" && (!hw-enabled || xor-step == 1);
+            visible: show-row;
+            height:  show-row ? xor-b.preferred-height : 0px;
+
+            xor-b := PathInputRow {
+                horizontal-stretch: 1;
+                value <=> root.xor-b-val;
+                label:       root.is-wasm ? "Ficheiro - Share B" : "Caminho - Share B";
+                placeholder: root.is-wasm ? (root.xor-b-loaded ? "Ficheiro carregado" : "Escolher ficheiro...") : "ex: /media/usb/share_b.bin";
+                locked:      root.is-wasm;
+                locked-text: root.xor-b-loaded ? "Ficheiro carregado" : "Nenhum ficheiro escolhido";
+                browse => {
+                    if root.is-wasm {
+                        root.on-pick-xor-file-login("b");
+                    } else {
+                        root.pick-target = "xor-b";
+                        let selected = root.on-pick-path("open-file", root.xor-b-val);
+                        if selected != "" { root.xor-b-val = selected; }
+                    }
+                }
+            }
+        }
+
+        // K_ext - manual: sempre visível; XOR: só no passo 2
+        kext-row := HorizontalLayout {
+            property <bool> show-row: hw-enabled && (keys-mode == "manual" || xor-step == 2);
+            visible: show-row;
+            height:  show-row ? kext-field.preferred-height : 0px;
+
+            kext-field := PathInputRow {
+                horizontal-stretch: 1;
+                value <=> root.kext-val;
+                label:       "K_ext (hex 32 bytes ou caminho)";
+                placeholder: "0x... ou /caminho/kext.bin";
+                hint:        "Ficheiro binário de 32 bytes ou string hex completa";
+                browse => {
+                    root.pick-target = "kext";
+                    let selected = root.on-pick-path("open-file", root.kext-val);
+                    if selected != "" { root.kext-val = selected; }
+                }
+            }
+        }
+
+        MessageBanner {
+            message: root.error;
+            variant: "error";
+        }
+
+        HorizontalLayout {
+            alignment: end;
+            spacing:   8px;
+
+            Button {
+                text:    "Cancelar";
+                clicked => { root.closed(); }
+            }
+
+            if keys-mode == "xor" && hw-enabled && xor-step == 2 : Button {
+                text:    "← Voltar";
+                clicked => { root.xor-step = 1; }
+            }
+
+            if keys-mode == "xor" && hw-enabled && xor-step == 1 : Button {
+                text:    "Continuar ->";
+                primary: true;
+                enabled: root.xor-a-val != "" && root.xor-b-val != "";
+                clicked => { root.xor-step = 2; }
+            }
+
+            if !(keys-mode == "xor" && hw-enabled && xor-step == 1) : Button {
+                text:    "Confirmar";
+                primary: true;
+                enabled: keys-mode == "manual" ? (k1-input.value != "" && k2-input.value != "") : root.xor-a-val != "" && root.xor-b-val != "";
+                clicked => {
+                    root.on-confirm(
+                        keys-mode == "manual" ? k1-input.value : "",
+                        keys-mode == "manual" ? k2-input.value : "",
+                        root.hw-enabled ? root.kext-val : "",
+                        keys-mode == "xor" ? root.xor-a-val : "",
+                        keys-mode == "xor" ? root.xor-b-val : ""
+                    );
+                }
+            }
+        }
+    }
+}
+
+export component LoginView inherits Rectangle {
+    width:      100%;
+    height:     100%;
+    background: Palette.bg-base;
+
+    // Props vindas do Rust
+    in property <string> default-session-path: "session.vaultseed";
+    in property <string> error:               "";
+    in property <bool>   hmac-warning:        false;
+    in property <bool>   hmac-tampered:       false;
+    in property <bool>   is-loading:          false;
+    in property <string> picked-path:         "";
+    in property <int>    pick-seq:             0;
+    private property <string> pick-target:    "";
+    in property <bool>   wasm-browser-storage: false;
+    in property <string> app-version:         "";
+    in property <bool>   is-wasm:             false;
+    in property <bool>   xor-a-loaded:        false;
+    in property <bool>   xor-b-loaded:        false;
+    callback on-pick-xor-file-login(string /*which*/);
+
+    changed pick-seq => {
+        if (picked-path != "" && pick-target == "session") {
+            path-field.value = picked-path;
+        }
+    }
+
+    // Callbacks -> Rust
+    callback on-unlock(
+        string, /*session_path*/
+        string, /*k1*/
+        string, /*k2*/
+        string, /*k_ext*/
+        string, /*xor_path_a*/
+        string  /*xor_path_b*/
+    );
+    callback on-open-tutorial();
+    callback on-confirm-no-hmac();
+    callback on-pick-path(string /*kind*/, string /*current*/) -> string;
+    callback on-pre-unlock(string) -> bool;
+    callback on-open-settings();
+
+    // Estado interno
+    private property <bool>   show-modal:  false;
+    private property <bool>   hw-enabled:  false;
+    private property <string> stored-path: "";
+
+    // Painel central
+    property <bool> narrow-panel: root.width < Tokens.mobile-breakpoint;
+
+    ScrollView {
+        width:  100%;
+        height: 100%;
+
+        Rectangle {
+            width:         narrow-panel ? parent.width : min(parent.width - 40px, 440px);
+            height:        narrow-panel ? max(parent.height, main-card.preferred-height) : main-card.preferred-height;
+            background:    Palette.bg-panel;
+            border-radius: narrow-panel ? 0px : 14px;
+            border-width:  narrow-panel ? 0px : 1px;
+            border-color:  Palette.border;
+            x: narrow-panel ? 0px : (parent.width  - self.width)  / 2;
+            // Centrado verticalmente (com margem mínima no topo em janelas baixas).
+            y: narrow-panel ? 0px : max(40px, (parent.height - self.height) / 2);
+            drop-shadow-blur:    narrow-panel ? 0px : 28px;
+            drop-shadow-color:   #00000077;
+            drop-shadow-offset-y: narrow-panel ? 0px : 8px;
+
+            VerticalLayout {
+                alignment: center;
+
+                main-card := VerticalLayout {
+                    padding:  20px;
+                    spacing:  12px;
+
+                    // Logo
+                    VerticalLayout {
+                        spacing: 8px;
+
+                        VerticalLayout {
+                            spacing: 10px;
+                            alignment: center;
+
+                            HorizontalLayout {
+                                alignment: center;
+
+                                Image {
+                                    source: @image-url("../../../assets/icons/Icon-login.png");
+                                    width: 84px;
+                                    height: 84px;
+                                    horizontal-alignment: center;
+                                }
+                            }
+
+                            Text {
+                                text:               "VaultSeed";
+                                font-size:          20px;
+                                font-weight:        700;
+                                color:              Palette.text-heading;
+                                horizontal-alignment: center;
+                                width: 100%;
+                            }
+                        }
+
+                        Text {
+                            text:               "Gerador de Senhas Híbrido (Cofre / Gerador)";
+                            font-size:          12px;
+                            color:              Palette.text-muted;
+                            horizontal-alignment: center;
+                            width: 100%;
+                        }
+                    }
+
+                    Divider {}
+
+                    path-field := PathInputRow {
+                        label:       "Ficheiro de sessão";
+                        placeholder: default-session-path;
+                        hint:        root.wasm-browser-storage ? "A sessão fica guardada neste browser." : "Deixe vazio para usar o caminho padrão";
+                        locked:      root.wasm-browser-storage;
+                        locked-text: "VaultSeed (Browser)";
+                        browse => {
+                            root.pick-target = "session";
+                            let selected = root.on-pick-path("open-file", path-field.value);
+                            if selected != "" {
+                                path-field.value = selected;
+                            }
+                        }
+                    }
+
+                    // Aviso HMAC ausente
+                    if hmac-warning : Rectangle {
+                        background:    #2e2714;
+                        border-radius: 8px;
+                        border-width:  1px;
+                        border-color:  Palette.warning;
+
+                        VerticalLayout {
+                            padding: 14px;
+                            spacing: 10px;
+
+                            HorizontalLayout {
+                                spacing:   8px;
+                                alignment: start;
+
+                                VerticalLayout {
+                                    alignment: center;
+                                    IconDot { size: 9px; icon-color: Palette.warning; }
+                                }
+
+                                VerticalLayout {
+                                    horizontal-stretch: 1;
+                                    spacing: 2px;
+
+                                    Text {
+                                        text:        "Ficheiro sem HMAC";
+                                        font-size:   13px;
+                                        font-weight: 700;
+                                        color:       Palette.warning;
+                                    }
+
+                                    Text {
+                                        text:      "Este ficheiro de sessão não contém HMAC de verificação. A integridade não pode ser confirmada.";
+                                        font-size: 12px;
+                                        color:     Palette.text-muted;
+                                        wrap:      word-wrap;
+                                    }
+                                }
+                            }
+
+                            HorizontalLayout {
+                                alignment: end;
+                                spacing:   8px;
+
+                                Button {
+                                    text:    "Abrir na mesma";
+                                    clicked => { root.on-confirm-no-hmac(); }
+                                }
+                            }
+                        }
+                    }
+
+                    // Aviso HMAC não corresponde (ficheiro adulterado)
+                    if hmac-tampered : Rectangle {
+                        background:    #3a1a1a;
+                        border-radius: 8px;
+                        border-width:  1px;
+                        border-color:  Palette.danger;
+
+                        VerticalLayout {
+                            padding: 14px;
+                            spacing: 10px;
+
+                            HorizontalLayout {
+                                spacing:   8px;
+                                alignment: start;
+
+                                VerticalLayout {
+                                    alignment: center;
+                                    IconWarning { size: 16px; icon-color: Palette.danger; }
+                                }
+
+                                VerticalLayout {
+                                    horizontal-stretch: 1;
+                                    spacing: 2px;
+
+                                    Text {
+                                        text:        "HMAC não corresponde";
+                                        font-size:   13px;
+                                        font-weight: 700;
+                                        color:       Palette.danger;
+                                    }
+
+                                    Text {
+                                        text:      "A verificação de integridade falhou - o ficheiro pode ter sido adulterado. Abra apenas se confiar na origem.";
+                                        font-size: 12px;
+                                        color:     Palette.text-muted;
+                                        wrap:      word-wrap;
+                                    }
+                                }
+                            }
+
+                            HorizontalLayout {
+                                alignment: end;
+                                spacing:   8px;
+
+                                Button {
+                                    text:    "Abrir mesmo assim";
+                                    clicked => { root.on-confirm-no-hmac(); }
+                                }
+                            }
+                        }
+                    }
+
+                    MessageBanner {
+                        message: show-modal ? "" : root.error;
+                        variant: "error";
+                    }
+
+                    // Botão principal
+                    Button {
+                        text:    is-loading ? "A desbloquear..." : "Desbloquear";
+                        primary: true;
+                        height:  42px;
+                        enabled: !is-loading;
+                        clicked => {
+                            root.stored-path = path-field.value == "" ? root.default-session-path : path-field.value;
+                            root.hw-enabled = root.on-pre-unlock(root.stored-path);
+                            root.show-modal = true;
+                        }
+                    }
+
+                    // Separador
+                    HorizontalLayout {
+                        spacing:   10px;
+                        alignment: center;
+
+                        Rectangle {
+                            height:             1px;
+                            background:         Palette.border;
+                            horizontal-stretch: 1;
+                        }
+
+                        Text {
+                            text:               "ou";
+                            font-size:          12px;
+                            color:              Palette.text-muted;
+                            vertical-alignment: center;
+                        }
+
+                        Rectangle {
+                            height:             1px;
+                            background:         Palette.border;
+                            horizontal-stretch: 1;
+                        }
+                    }
+
+                    // Botão tutorial
+                    Button {
+                        text:    "Criar nova sessão";
+                        height:  42px;
+                        enabled: !is-loading;
+                        clicked => { root.on-open-tutorial(); }
+                    }
+
+                }
+            }
+        }
+    }
+
+    // Versão (canto superior esquerdo)
+    Text {
+        x: 10px; y: 8px;
+        text:       root.app-version == "" ? "" : "v" + root.app-version;
+        font-size:  11px;
+        color:      Palette.text-muted;
+    }
+
+    // Botão de Configurações (canto superior direito, encostado sem margem)
+    Rectangle {
+        width:         40px;
+        height:        40px;
+        x:             parent.width - self.width;
+        y:             0px;
+        border-radius: 6px;
+        background:    settings-ta.has-hover ? Palette.bg-hover : transparent;
+        animate background { duration: 120ms; }
+
+        settings-ta := TouchArea {
+            clicked => { root.on-open-settings(); }
+        }
+
+        IconGear {
+            size: 18px;
+            x: (parent.width  - self.width)  / 2;
+            y: (parent.height - self.height) / 2;
+            icon-color: settings-ta.has-hover ? Palette.accent : Palette.text-muted;
+            animate icon-color { duration: 120ms; }
+        }
+    }
+
+    AuthenticationModal {
+        show:        root.show-modal;
+        error:       root.error;
+        hw-enabled:  root.hw-enabled;
+        picked-path: root.picked-path;
+        pick-seq:    root.pick-seq;
+        pick-target <=> root.pick-target;
+        is-wasm:      root.is-wasm;
+        xor-a-loaded: root.xor-a-loaded;
+        xor-b-loaded: root.xor-b-loaded;
+        on-pick-path(kind, current) => { root.on-pick-path(kind, current) }
+        on-pick-xor-file-login(which) => { root.on-pick-xor-file-login(which) }
+        closed => { root.show-modal = false; }
+        on-confirm(k1, k2, kext, xor-a, xor-b) => {
+            root.on-unlock(root.stored-path, k1, k2, kext, xor-a, xor-b);
+        }
+    }
+}

@@ -1,0 +1,15 @@
+{
+  "name": "vaultseed",
+  "type": "module",
+  "version": "0.5.4",
+  "files": [
+    "vaultseed_bg.wasm",
+    "vaultseed.js",
+    "vaultseed.d.ts"
+  ],
+  "main": "vaultseed.js",
+  "types": "vaultseed.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}

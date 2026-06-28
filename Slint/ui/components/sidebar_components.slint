@@ -1,0 +1,290 @@
+import { ScrollView } from "std-widgets.slint";
+import { Palette, Tokens, Divider, SidebarToggle, IconClose } from "shared_components.slint";
+
+export component SidebarNavItem inherits Rectangle {
+    in property <string> icon;
+    in property <string> label;
+    in property <string> sublabel: "";
+    in property <bool>   active:  false;
+    in property <bool>   enabled: true;
+    in property <bool>   compact: false;
+
+    callback clicked;
+
+    height:        (sublabel != "" && !root.compact) ? 52px : Tokens.nav-item-height;
+    border-radius: Tokens.radius-sm;
+    background:    active ? Palette.bg-active : ta.has-hover && enabled ? Palette.bg-hover : transparent;
+
+    animate background { duration: 120ms; }
+
+    ta := TouchArea {
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+    }
+
+    HorizontalLayout {
+        padding-left:  12px;
+        padding-right: 12px;
+        spacing:       10px;
+        alignment:     start;
+
+        // Indicador lateral de activo
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width:         3px;
+                height:        22px;
+                border-radius: 2px;
+                background:    root.active ? Palette.accent : transparent;
+                animate background { duration: 150ms; }
+            }
+        }
+
+        if root.icon != "" : Text {
+            text:       root.icon;
+            font-size:  Tokens.fs-column;
+            color:      root.active  ? Palette.accent : root.enabled ? Palette.text-primary : Palette.text-muted;
+            vertical-alignment: center;
+            animate color { duration: 120ms; }
+        }
+
+        if !root.compact : VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing:   1px;
+
+            Text {
+                text:             root.label;
+                font-size:        Tokens.fs-body;
+                font-weight:      root.active ? 700 : 400;
+                color:            root.active  ? Palette.text-heading : root.enabled ? Palette.text-primary : Palette.text-muted;
+                overflow:         elide;
+                animate color { duration: 120ms; }
+            }
+
+            if root.sublabel != "" : Text {
+                text:      root.sublabel;
+                font-size: Tokens.fs-label;
+                color:     Palette.text-muted;
+                overflow:  elide;
+            }
+        }
+    }
+}
+
+export component HeaderMenuToggle inherits Rectangle {
+    in property <bool> open: false;
+    callback clicked;
+
+    width:  30px;
+    height: 30px;
+    border-radius: Tokens.radius-sm;
+    background: ta.has-hover ? Palette.bg-hover : transparent;
+    animate background { duration: 100ms; }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+
+    // Quando aberto: ✕ (dois traços diagonais); quando fechado: ☰ (três linhas)
+    if !root.open : VerticalLayout {
+        alignment: center;
+        spacing:   4px;
+        padding-left:  7px;
+        padding-right: 7px;
+
+        for _ in [0, 1, 2] : Rectangle {
+            height:        2px;
+            border-radius: 1px;
+            background:    Palette.text-muted;
+        }
+    }
+
+    if root.open : IconClose {
+        x: (parent.width  - self.width)  / 2;
+        y: (parent.height - self.height) / 2;
+        size: 12px;
+    }
+}
+
+// SIDEBAR GROUP LABEL - rótulo de grupo dentro de uma sidebar
+export component SidebarGroupLabel inherits VerticalLayout {
+    in property <string> label;
+
+    padding-left:   14px;
+    padding-top:    10px;
+    padding-bottom: 2px;
+
+    Text {
+        text:        root.label;
+        color:       Palette.text-muted;
+        font-size:   Tokens.fs-micro;
+        font-weight: 700;
+    }
+}
+
+// SIDEBAR OPTION - item de uma lista de opções de SidebarBase (sem ícones)
+export struct SidebarOption {
+    label:    string,
+    sublabel: string,
+    active:   bool,
+    enabled:  bool,
+}
+
+// SIDEBAR BASE - componente base para TODAS as sidebars/sub-sidebars.
+export component SidebarBase inherits Rectangle {
+    in property <string> title: "";
+    in property <image>  title-icon;
+    in-out property <bool> minimized: false;
+    in property <bool>   allow-minimize: true;
+    in property <[SidebarOption]> options: [];
+    in property <string> options-label: "";
+    in property <[SidebarOption]> bottom-options: [];
+    in property <string> bottom-options-label: "";
+    // Largura abaixo da qual o botão de minimizar aparece no cabeçalho.
+    in property <length> narrow-width: 160px;
+    // flush: quando true, remove o padding interno para conteúdo que deve ficar rente às bordas
+    in property <bool>   flush: false;
+    // no-spacer: desativa o espaço flexível interno; usar quando @children já tem um item com vertical-stretch
+    in property <bool>   no-spacer: false;
+
+    // avail-width: largura disponível para o conteúdo pai (passa do view).
+    // narrow: ativo quando sidebar ocuparia ≥50% da largura (avail-width < list-col-width * 2).
+    // Em narrow+minimized -> strip de colapso; narrow+open -> ocupa avail-width completo.
+    in property <length> avail-width: 1000px;
+    out property <bool>  narrow: root.avail-width > 0px && root.avail-width < Tokens.mobile-breakpoint;
+
+    callback option-clicked(int);
+    callback bottom-option-clicked(int);
+
+    // Só mostra o botão de minimizar quando a sidebar está "narrow" (ecrã estreito / sidebar ocuparia ≥50% da largura) - nunca em ecrãs largos.
+    private property <bool> show-minimize-toggle: root.allow-minimize && root.narrow;
+
+    width: root.narrow ? (root.minimized ? Tokens.sidebar-collapsed : root.avail-width) : Tokens.list-col-width;
+    animate width { duration: 200ms; easing: ease-in-out; }
+
+    background:   Palette.bg-sidebar;
+    border-width: 0px;
+
+    // Linha separadora direita
+    Rectangle {
+        x:          parent.width - 1px;
+        y:          0;
+        width:      1px;
+        height:     100%;
+        background: Palette.border;
+    }
+
+    // Strip de colapso (narrow + fechado) - sobrepõe o conteúdo
+    if root.narrow && root.minimized : VerticalLayout {
+        padding-top: 8px;
+        alignment:   start;
+        HorizontalLayout {
+            alignment: center;
+            height:    Tokens.nav-item-height;
+            SidebarToggle { open: false; clicked => { root.minimized = false; } }
+        }
+    }
+
+    property <bool> really-minimized: root.narrow && root.minimized;
+
+    VerticalLayout {
+        visible: !root.really-minimized;
+        padding-top:    root.flush ? 0px : 16px;
+        padding-bottom: root.flush ? 0px : 16px;
+        // Minimizado: 44px - 6px - 6px = 32px = largura exacta do SidebarToggle.
+        padding-left:   root.flush ? 0px : (root.really-minimized ? 6px : 10px);
+        padding-right:  root.flush ? 0px : (root.really-minimized ? 6px : 10px);
+        spacing:        root.flush ? 0px : 6px;
+
+        // Cabeçalho: título (clicável p/ minimizar) + botão de minimizar.
+        // Quando sem título mas allow-minimize, mostra apenas o toggle.
+        if root.title != "" : Rectangle {
+            height: 32px;
+
+            header-ta := TouchArea {
+                width:   100%;
+                height:  100%;
+                enabled: root.allow-minimize;
+                clicked => { root.minimized = !root.minimized; }
+            }
+
+            HorizontalLayout {
+                spacing:   8px;
+                alignment: start;
+
+                if root.show-minimize-toggle : VerticalLayout {
+                    alignment: center;
+                    SidebarToggle {
+                        open: !root.minimized;
+                        clicked => { root.minimized = !root.minimized; }
+                    }
+                }
+
+                if root.title-icon.width > 0 : Image {
+                    source: root.title-icon;
+                    width:  22px;
+                    height: 22px;
+                }
+
+                if !root.really-minimized : Text {
+                    text:        root.title;
+                    font-size:   Tokens.fs-title;
+                    font-weight: 700;
+                    color:       Palette.text-heading;
+                    vertical-alignment: center;
+                    horizontal-stretch:  1;
+                    overflow:    elide;
+                }
+            }
+        }
+
+        if root.title != "" : Divider {}
+
+        // Opções no topo
+        if !root.really-minimized && root.options-label != "" : SidebarGroupLabel { label: root.options-label; }
+        for opt[i] in root.options : SidebarNavItem {
+            label:    opt.label;
+            sublabel: opt.sublabel;
+            active:   opt.active;
+            enabled:  opt.enabled;
+            compact:  root.really-minimized;
+            clicked => { root.option-clicked(i); }
+        }
+
+        ScrollView {
+            vertical-stretch: root.no-spacer ? 0 : 1;
+            VerticalLayout {
+                @children
+            }
+        }
+
+        if root.bottom-options.length > 0 : Divider {}
+        if !root.really-minimized && root.bottom-options-label != "" : SidebarGroupLabel { label: root.bottom-options-label; }
+        for opt[i] in root.bottom-options : SidebarNavItem {
+            label:    opt.label;
+            sublabel: opt.sublabel;
+            active:   opt.active;
+            enabled:  opt.enabled;
+            compact:  root.really-minimized;
+            clicked => { root.bottom-option-clicked(i); }
+        }
+    }
+}
+
+export component StaticPasswordsSidebar inherits Rectangle {
+    in property <bool>   collapsed:  false;
+    in property <bool>   narrow:     false;
+    in property <length> open-width: Tokens.list-col-width;
+    in property <length> full-width: 1000px;
+    in property <color>  bg: Palette.bg-sidebar;
+
+    width: root.narrow ? (root.collapsed ? Tokens.sidebar-collapsed : root.full-width) : root.open-width;
+    animate width { duration: 200ms; easing: ease-in-out; }
+
+    background: root.bg;
+    @children
+}
+
+export component ConfigurationSidebar inherits StaticPasswordsSidebar {}
