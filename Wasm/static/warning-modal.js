@@ -71,7 +71,7 @@ export function showWarningIfNeeded({ onContinue, onCancel }) {
       <p>
         Esta é uma versão para browser. O recomendado é usar a versão de
         aplicativo que suporta Android, Windows e Linux, pois esta versão
-        pode ter riscos quanto a extensões maliciosas e outros.
+        pode ter riscos quanto a extensões maliciosas e outras ameaças.
       </p>
       <p>
         <a href="${RELEASES}" target="_blank" rel="noopener noreferrer">
