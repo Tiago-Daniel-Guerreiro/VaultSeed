@@ -6,13 +6,17 @@
     <title>VaultSeed</title>
     <link rel="icon" type="image/png" href="./icon.png" />
     <style>
-      * { margin: 0; padding: 0; }
+      * { margin: 0; padding: 0; box-sizing: border-box; }
       html, body { height: 100%; background: #111; overflow: hidden; }
 
       canvas {
-        display: block;
-        width: 100vw;
-        height: 100vh;
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100vw !important;
+        height: 100vh !important;
+        z-index: 2;
+        background: transparent;
       }
 
       header {
@@ -20,16 +24,23 @@
         top: 50%;
         left: 50%;
         transform: translate(-50%, -50%);
+        z-index: 1;
         color: #ddd;
         font-family: sans-serif;
         text-align: center;
-        pointer-events: none;
       }
-      header img { display: block; margin: 0 auto 10px; }
+      
+      header img { 
+        display: block; 
+        margin: 0 auto 16px; 
+        width: 256px; 
+        height: 256px; 
+        object-fit: contain;
+      }
     </style>
   </head>
   <body>
-    <canvas id="canvas"></canvas>
+    <canvas id="canvas" tabindex="0" alt="VaultSeed"></canvas>
 
     <header>
       <img src="./icon.png" alt="VaultSeed" />
